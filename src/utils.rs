@@ -85,7 +85,9 @@ impl DeliveryTag {
 }
 
 /// The representation that is sent in the underlying connection
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+// TODO: Use AMQPProperties and remove this
 pub struct AmqpMessage<M> {
     /// The inner part of the message
     pub inner: M,
@@ -93,5 +95,4 @@ pub struct AmqpMessage<M> {
     pub task_id: TaskId,
     /// The current attempt of the message
     pub attempt: Attempt,
-    pub(crate) _priv: (),
 }
