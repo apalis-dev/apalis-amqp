@@ -84,7 +84,6 @@ impl DeliveryTag {
     }
 }
 
-
 /// The representation that is sent in the underlying connection
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
