@@ -79,6 +79,7 @@
 mod ack;
 use apalis_core::{
     backend::Backend,
+    layers::AckLayer,
     mq::MessageQueue,
     poller::Poller,
     request::{Parts, Request, RequestStream},
@@ -98,7 +99,6 @@ use std::{
     marker::PhantomData,
     sync::Arc,
 };
-use tower::layer::util::Identity;
 use utils::{AmqpContext, AmqpMessage, Config, DeliveryTag};
 
 /// Contains basic utilities for handling config and messages
@@ -163,16 +163,17 @@ impl<M: Serialize + DeserializeOwned + Send + Sync + 'static> MessageQueue<M> fo
 impl<M: DeserializeOwned + Send + 'static, Res> Backend<Request<M, AmqpContext>, Res>
     for AmqpBackend<M>
 {
-    type Layer = Identity;
+    type Layer = AckLayer<Self, M, AmqpContext, Res>;
     type Stream = RequestStream<Request<M, AmqpContext>>;
 
-    fn poll<Svc>(self, worker: &Worker<Context>) -> Poller<Self::Stream> {
+    fn poll<Svc>(self, worker: &Worker<Context>) -> Poller<Self::Stream, Self::Layer> {
         let channel = self.channel.clone();
         let worker = worker.clone();
+        let config = self.config.clone();
         let stream = async_stream::stream! {
             let mut consumer = channel
             .basic_consume(
-                self.config.namespace().as_str(),
+                config.namespace().as_str(),
                 &worker.id().to_string(),
                 BasicConsumeOptions::default(),
                 FieldTable::default(),
@@ -189,7 +190,7 @@ impl<M: DeserializeOwned + Send + 'static, Res> Backend<Request<M, AmqpContext>,
                         parts.task_id = req.task_id;
                         parts.context = AmqpContext::new(DeliveryTag::new(tag));
                         parts.attempt = req.attempt;
-                        parts.namespace = Some(self.config.namespace().to_owned());
+                        parts.namespace = Some(config.namespace().to_owned());
                         parts.data = Default::default();
                         Request::new_with_parts(req.inner, parts)
                     })?;
@@ -197,7 +198,7 @@ impl<M: DeserializeOwned + Send + 'static, Res> Backend<Request<M, AmqpContext>,
 
             }
         };
-        Poller::new(stream.boxed(), std::future::pending())
+        Poller::new_with_layer(stream.boxed(), std::future::pending(), AckLayer::new(self))
     }
 }
 
