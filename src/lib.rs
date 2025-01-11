@@ -141,7 +141,6 @@ impl<M: Serialize + DeserializeOwned + Send + Sync + 'static> MessageQueue<M> fo
                     inner: message,
                     task_id: Default::default(),
                     attempt: Default::default(),
-                    _priv: (),
                 })
                 .map_err(|e| Error::IOError(Arc::new(io::Error::new(ErrorKind::InvalidData, e))))?,
                 BasicProperties::default(),
