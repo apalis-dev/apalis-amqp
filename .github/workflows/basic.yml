@@ -1,0 +1,44 @@
+name: Basics Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  check:
+    name: Check Rust Crate
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Install Rust using `rustup`
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      # Ensure all dependencies are installed
+      - name: Install dependencies
+        run: |
+          rustup component add clippy rustfmt
+
+      # Check formatting
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
+
+      # Run Clippy lints
+      - name: Run Clippy
+        run: |
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      # Build documentation
+      - name: Build documentation
+        run: |
+          cargo doc --no-deps --all-features --document-private-items
