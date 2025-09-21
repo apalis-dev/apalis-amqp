@@ -99,9 +99,9 @@ where
             let bytes = match C::encode(&item.args) {
                 Ok(bytes) => bytes,
                 Err(e) => {
-                    return Poll::Ready(Err(lapin::Error::from(std::io::Error::other(
-                        format!("Failed to encode task: {e}"),
-                    ))))
+                    return Poll::Ready(Err(lapin::Error::from(std::io::Error::other(format!(
+                        "Failed to encode task: {e}"
+                    )))))
                 }
             };
             let namespace = namespace.to_string();
