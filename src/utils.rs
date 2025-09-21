@@ -15,7 +15,7 @@ impl Config {
     pub fn new(namespace: &str) -> Self {
         Config {
             max_retries: 25,
-            namespace: namespace.to_owned().into(),
+            namespace: namespace.to_owned(),
             heartbeat_interval: Duration::from_secs(60),
         }
     }

@@ -226,7 +226,7 @@ impl<M: DeserializeOwned + Send + 'static> Backend<M> for AmqpBackend<M> {
             let msg: M = serde_json::from_slice(&bytes).unwrap();
 
             let task = TaskBuilder::new(msg)
-                .with_task_id(TaskId::new(tag as u64))
+                .with_task_id(TaskId::new(tag))
                 .with_ctx(AmqpContext::new(DeliveryTag::new(tag), item.properties))
                 .build();
             Some(task)
