@@ -15,15 +15,12 @@ async fn main() {
     let env = std::env::var("AMQP_ADDR").unwrap();
     let mut mq = AmqpBackend::new_from_addr(&env).await.unwrap();
     // add some jobs
-    mq.enqueue(TestMessage(42)).await.unwrap();
-    Monitor::new()
-        .register({
-            WorkerBuilder::new("rango-amigo")
-                .data(0usize)
-                .retry(RetryPolicy::retries(5))
-                .backend(mq)
-                .build_fn(test_job)
-        })
+    mq.push(TestMessage(42)).await.unwrap();
+    WorkerBuilder::new("rango-amigo")
+        .backend(mq)
+        .data(0usize)
+        .retry(RetryPolicy::retries(5))
+        .build(test_job)
         .run()
         .await
         .unwrap();

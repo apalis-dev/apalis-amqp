@@ -12,7 +12,7 @@ keywords = ["worker", "amqp", "rabbitmq", "queue", "apalis"]
 categories = ["database"]
 
 [dependencies]
-apalis-core = { version = "1.0.0-alpha.1", features = ["json", "sleep"] }
+apalis-core = { version = "1.0.0-alpha.8", features = ["json", "sleep"] }
 serde = "1"
 serde_json = "1"
 deadpool = "0.12.0"
@@ -25,8 +25,8 @@ pin-project = "1.0"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-apalis-core = { version = "1.0.0-alpha.1" }
-apalis = { version = "1.0.0-alpha.1", default-features = false, features = [
+apalis-core = { version = "1.0.0-alpha.8" }
+apalis = { version = "1.0.0-alpha.8", default-features = false, features = [
     "retry",
 ] }
 futures-util = "0.3"

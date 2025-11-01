@@ -28,7 +28,7 @@
 
 ## Overview
 
-`apalis-amqp` is a Rust crate that provides utilities for integrating `apalis` with AMQP message queuing systems. It includes an `AmqpBackend` implementation for use with the pushing and popping messages, as well as a `MessageQueue<M>` implementation for consuming messages from an AMQP queue.
+`apalis-amqp` is a Rust crate that provides utilities for integrating `apalis` with AMQP message queuing systems. It includes an `AmqpBackend` implementation for use with the pushing and popping messages.
 
 ## Features
 

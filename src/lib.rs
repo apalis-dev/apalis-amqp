@@ -5,7 +5,7 @@
 //! ## Overview
 
 //! `apalis-amqp` is a Rust crate that provides utilities for integrating `apalis` with AMQP message queuing systems.
-//!  It includes an `AmqpBackend` implementation for use with the pushing and popping jobs, as well as a `MessageQueue<J>` implementation for consuming messages from an AMQP queue and passing them to `Worker` for processing.
+//!  It includes an `AmqpBackend` implementation for use with the pushing and popping jobs.
 
 //! ## Features
 
@@ -21,8 +21,8 @@
 
 //! ````toml
 //! [dependencies]
-//! apalis = { version = "0.6.0-rc.5", features = ["tokio-comp"] }
-//! apalis-amqp = "0.4"
+//! apalis = { version = "1.0.0-alpha.8" }
+//! apalis-amqp = "1.0.0-alpha.1"
 //! serde = "1"
 //! ````
 
@@ -164,7 +164,9 @@ impl<M> Clone for AmqpBackend<M> {
 //     }
 // }
 
-impl<M: DeserializeOwned + Send + 'static> Backend<M> for AmqpBackend<M> {
+impl<M: Serialize + DeserializeOwned + Send + 'static> Backend for AmqpBackend<M> {
+    type Args = M;
+    type Compact = Vec<u8>;
     type Error = Error;
     type Beat = BoxStream<'static, Result<(), Self::Error>>;
     type Codec = JsonCodec<Vec<u8>>;
@@ -317,7 +319,7 @@ mod tests {
     #[tokio::test]
     async fn it_works() {
         let env = std::env::var("AMQP_ADDR").unwrap();
-        let mut backend = AmqpBackend::new_from_addr(&env).await.unwrap();
+        let mut backend: AmqpBackend<TestMessage> = AmqpBackend::new_from_addr(&env).await.unwrap();
         backend.push(TestMessage).await.unwrap();
 
         let worker = WorkerBuilder::new("rango-amigo")

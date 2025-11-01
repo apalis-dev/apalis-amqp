@@ -16,9 +16,9 @@ use pin_project::pin_project;
 #[pin_project]
 #[derive(Debug)]
 pub(super) struct AmqpSink<T, C> {
-    items: VecDeque<AmqpTask<T>>,
+    items: VecDeque<AmqpTask<Vec<u8>>>,
     pending_sends: VecDeque<PendingSend>,
-    _codec: std::marker::PhantomData<C>,
+    _codec: std::marker::PhantomData<(T, C)>,
 }
 
 impl<T, C> Clone for AmqpSink<T, C> {
@@ -51,7 +51,7 @@ impl Debug for PendingSend {
     }
 }
 
-impl<T, C> Sink<AmqpTask<T>> for AmqpBackend<T, C>
+impl<T, C> Sink<AmqpTask<Vec<u8>>> for AmqpBackend<T, C>
 where
     C::Error: std::error::Error + Send,
     C: Codec<T, Compact = Vec<u8>>,
@@ -82,7 +82,7 @@ where
         Poll::Ready(Ok(()))
     }
 
-    fn start_send(self: Pin<&mut Self>, item: AmqpTask<T>) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, item: AmqpTask<Vec<u8>>) -> Result<(), Self::Error> {
         let this = self.project().sink;
         let items = this.get_mut();
         items.items.push_back(item);
@@ -96,14 +96,7 @@ where
 
         // First, convert any queued items to pending sends
         while let Some(item) = sink.items.pop_front() {
-            let bytes = match C::encode(&item.args) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    return Poll::Ready(Err(lapin::Error::from(std::io::Error::other(format!(
-                        "Failed to encode task: {e}"
-                    )))))
-                }
-            };
+            let bytes = item.args;
             let namespace = namespace.to_string();
             let channel = channel.clone();
             let properties = item.parts.ctx.properties().clone();
