@@ -1,13 +1,13 @@
-use apalis_core::task::attempt::Attempt;
-use apalis_core::task::namespace::Namespace;
-use apalis_core::task::task_id::TaskId;
+use lapin::BasicProperties;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Config for the backend
 #[derive(Clone, Debug)]
 pub struct Config {
     max_retries: usize,
-    namespace: Namespace,
+    namespace: String,
+    heartbeat_interval: Duration,
 }
 
 impl Config {
@@ -15,7 +15,8 @@ impl Config {
     pub fn new(namespace: &str) -> Self {
         Config {
             max_retries: 25,
-            namespace: namespace.to_owned().into(),
+            namespace: namespace.to_owned(),
+            heartbeat_interval: Duration::from_secs(60),
         }
     }
 
@@ -30,13 +31,23 @@ impl Config {
     }
 
     /// Gets the namespace.
-    pub fn namespace(&self) -> &Namespace {
+    pub fn namespace(&self) -> &String {
         &self.namespace
     }
 
     /// Sets the namespace.
-    pub fn set_namespace(&mut self, namespace: Namespace) {
+    pub fn set_namespace(&mut self, namespace: String) {
         self.namespace = namespace;
+    }
+
+    /// Gets the heartbeat interval.
+    pub fn heartbeat_interval(&self) -> Duration {
+        self.heartbeat_interval
+    }
+
+    /// Sets the heartbeat interval.
+    pub fn set_heartbeat_interval(&mut self, interval: Duration) {
+        self.heartbeat_interval = interval;
     }
 }
 
@@ -44,12 +55,13 @@ impl Config {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct AmqpContext {
     tag: DeliveryTag,
+    properties: BasicProperties,
 }
 
 impl AmqpContext {
     /// Creates a new `Context` instance with the given parameters.
-    pub fn new(tag: DeliveryTag) -> Self {
-        AmqpContext { tag }
+    pub fn new(tag: DeliveryTag, properties: BasicProperties) -> Self {
+        AmqpContext { tag, properties }
     }
 
     /// Gets the delivery tag.
@@ -60,6 +72,16 @@ impl AmqpContext {
     /// Sets the delivery tag.
     pub fn set_tag(&mut self, tag: DeliveryTag) {
         self.tag = tag;
+    }
+
+    /// Gets the message properties.
+    pub fn properties(&self) -> &BasicProperties {
+        &self.properties
+    }
+
+    /// Sets the message properties.
+    pub fn set_properties(&mut self, properties: BasicProperties) {
+        self.properties = properties;
     }
 }
 
@@ -82,17 +104,4 @@ impl DeliveryTag {
     pub fn set_value(&mut self, value: u64) {
         self.0 = value;
     }
-}
-
-/// The representation that is sent in the underlying connection
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-// TODO: Use AMQPProperties and remove this
-pub struct AmqpMessage<M> {
-    /// The inner part of the message
-    pub inner: M,
-    /// The task id allocated to the message
-    pub task_id: TaskId,
-    /// The current attempt of the message
-    pub attempt: Attempt,
 }
