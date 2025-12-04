@@ -129,47 +129,10 @@ impl<M> Clone for AmqpBackend<M> {
     }
 }
 
-// impl<M: Serialize + DeserializeOwned + Send + Sync + 'static> MessageQueue<M> for AmqpBackend<M> {
-//     type Error = Error;
-//     /// Publishes a new job to the queue.
-//     ///
-//     /// This function serializes the provided job data to a JSON string and publishes it to the
-//     /// queue with the namespace configured.
-//     async fn enqueue(&mut self, message: M) -> Result<(), Self::Error> {
-//         let _confirmation = self
-//             .channel
-//             .basic_publish(
-//                 "",
-//                 self.config.namespace().as_str(),
-//                 BasicPublishOptions::default(),
-//                 &serde_json::to_vec(&AmqpMessage {
-//                     inner: message,
-//                     task_id: Default::default(),
-//                     attempt: Default::default(),
-//                 })
-//                 .map_err(|e| Error::IOError(Arc::new(io::Error::new(ErrorKind::InvalidData, e))))?,
-//                 BasicProperties::default(),
-//             )
-//             .await?
-//             .await?;
-//         Ok(())
-//     }
-
-//     async fn size(&mut self) -> Result<usize, Self::Error> {
-//         Ok(self.queue.message_count() as usize)
-//     }
-
-//     async fn dequeue(&mut self) -> Result<Option<M>, Self::Error> {
-//         Ok(None)
-//     }
-// }
-
 impl<M: Serialize + DeserializeOwned + Send + 'static> Backend for AmqpBackend<M> {
     type Args = M;
-    type Compact = Vec<u8>;
     type Error = Error;
     type Beat = BoxStream<'static, Result<(), Self::Error>>;
-    type Codec = JsonCodec<Vec<u8>>;
     type Layer = AcknowledgeLayer<Self>;
     type Stream = TaskStream<Task<M, AmqpContext, Self::IdType>, Self::Error>;
     type Context = AmqpContext;
