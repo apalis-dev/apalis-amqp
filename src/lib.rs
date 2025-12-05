@@ -77,22 +77,25 @@
 mod ack;
 mod sink;
 use apalis_core::{
-    backend::{codec::json::JsonCodec, Backend, TaskStream},
+    backend::{
+        codec::{json::JsonCodec, Codec},
+        Backend, BackendExt, TaskStream,
+    },
     task::{builder::TaskBuilder, task_id::TaskId, Task},
     worker::{context::WorkerContext, ext::ack::AcknowledgeLayer},
 };
 use deadpool_lapin::{Manager, Pool};
 use futures::{
     stream::{self, BoxStream},
-    StreamExt, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
 };
 use lapin::{
+    message::Delivery,
     options::{BasicConsumeOptions, QueueDeclareOptions},
     types::FieldTable,
     Channel, ConnectionProperties, Error, ErrorKind, Queue,
 };
 use pin_project::pin_project;
-use serde::{de::DeserializeOwned, Serialize};
 use std::{
     io::{self},
     marker::PhantomData,
@@ -103,7 +106,11 @@ use utils::{AmqpContext, Config, DeliveryTag};
 /// Contains basic utilities for handling config and messages
 pub mod utils;
 
-type AmqpTask<T> = Task<T, AmqpContext, u64>;
+/// Type alias for an AMQP task with context and u64 as the task ID type.
+pub type AmqpTask<T> = Task<T, AmqpContext, u64>;
+
+/// Type alias for an AMQP task ID with u64 as the ID type.
+pub type AmqpTaskId = TaskId<u64>;
 
 #[derive(Debug)]
 /// A wrapper around a `lapin` AMQP channel that implements message queuing functionality.
@@ -117,7 +124,7 @@ pub struct AmqpBackend<M, Codec = JsonCodec<Vec<u8>>> {
     sink: sink::AmqpSink<M, Codec>,
 }
 
-impl<M> Clone for AmqpBackend<M> {
+impl<M, C> Clone for AmqpBackend<M, C> {
     fn clone(&self) -> Self {
         Self {
             channel: self.channel.clone(),
@@ -129,7 +136,11 @@ impl<M> Clone for AmqpBackend<M> {
     }
 }
 
-impl<M: Serialize + DeserializeOwned + Send + 'static> Backend for AmqpBackend<M> {
+impl<M: Send + 'static, C> Backend for AmqpBackend<M, C>
+where
+    C: Codec<M, Compact = Vec<u8>>,
+    C::Error: std::error::Error + Send + Sync + 'static,
+{
     type Args = M;
     type Error = Error;
     type Beat = BoxStream<'static, Result<(), Self::Error>>;
@@ -168,6 +179,58 @@ impl<M: Serialize + DeserializeOwned + Send + 'static> Backend for AmqpBackend<M
     }
 
     fn poll(self, worker: &WorkerContext) -> Self::Stream {
+        self.poll_delivery(worker)
+            .map(move |item| {
+                let item = item?;
+                let bytes = item.data;
+                let tag = item.delivery_tag;
+
+                let msg: M = C::decode(&bytes).map_err(|e| {
+                    ErrorKind::IOError(Arc::new(io::Error::new(io::ErrorKind::InvalidData, e)))
+                })?;
+
+                let task = TaskBuilder::new(msg)
+                    .with_task_id(TaskId::new(tag))
+                    .with_ctx(AmqpContext::new(DeliveryTag::new(tag), item.properties))
+                    .build();
+                Ok(Some(task))
+            })
+            .boxed()
+    }
+}
+
+impl<M, C: Send + 'static> BackendExt for AmqpBackend<M, C>
+where
+    Self: Backend<Args = M, IdType = u64, Context = AmqpContext, Error = lapin::Error>,
+    C: Codec<M, Compact = Vec<u8>> + Send + 'static,
+    C::Error: std::error::Error + Send + Sync + 'static,
+    M: Send + 'static + Unpin,
+{
+    type Codec = C;
+    type Compact = Vec<u8>;
+    type CompactStream = TaskStream<AmqpTask<Self::Compact>, Error>;
+
+    fn poll_compact(self, worker: &WorkerContext) -> Self::CompactStream {
+        self.poll_delivery(worker)
+            .map_ok(move |item| {
+                let bytes = item.data;
+                let tag = item.delivery_tag;
+
+                let task = TaskBuilder::new(bytes)
+                    .with_task_id(TaskId::new(tag))
+                    .with_ctx(AmqpContext::new(DeliveryTag::new(tag), item.properties))
+                    .build();
+                Some(task)
+            })
+            .boxed()
+    }
+}
+
+impl<M, C> AmqpBackend<M, C> {
+    fn poll_delivery(
+        self,
+        worker: &WorkerContext,
+    ) -> impl Stream<Item = Result<Delivery, Error>> + 'static {
         let channel = self.channel.clone();
         let worker = worker.clone();
         let config = self.config.clone();
@@ -184,23 +247,12 @@ impl<M: Serialize + DeserializeOwned + Send + 'static> Backend for AmqpBackend<M
                 .await?;
             Ok::<_, Error>(consumer)
         })
-        .try_flatten()
-        .map_ok(move |item| {
-            let bytes = item.data;
-            let tag = item.delivery_tag;
-            let msg: M = serde_json::from_slice(&bytes).unwrap();
-
-            let task = TaskBuilder::new(msg)
-                .with_task_id(TaskId::new(tag))
-                .with_ctx(AmqpContext::new(DeliveryTag::new(tag), item.properties))
-                .build();
-            Some(task)
-        });
-        stream.boxed()
+        .try_flatten();
+        stream
     }
 }
 
-impl<M: Serialize + DeserializeOwned + Send + 'static> AmqpBackend<M> {
+impl<M: Send + 'static> AmqpBackend<M> {
     /// Constructs a new instance of `AmqpBackend` from a `lapin` channel.
     pub fn new(channel: Channel, queue: Queue) -> Self {
         Self::new_with_config(channel, queue, Config::new(std::any::type_name::<M>()))
@@ -269,8 +321,10 @@ impl<M: Serialize + DeserializeOwned + Send + 'static> AmqpBackend<M> {
 mod tests {
     use super::*;
 
+    use apalis::prelude::{BoxDynError, EventListenerExt};
     use apalis_core::{backend::TaskSink, worker::builder::WorkerBuilder};
-    use serde::Deserialize;
+    use apalis_workflow::{Workflow, WorkflowSink};
+    use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
     struct TestMessage;
@@ -280,7 +334,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn it_works() {
+    async fn basic_worker() {
         let env = std::env::var("AMQP_ADDR").unwrap();
         let mut backend: AmqpBackend<TestMessage> = AmqpBackend::new_from_addr(&env).await.unwrap();
         backend.push(TestMessage).await.unwrap();
@@ -290,5 +344,37 @@ mod tests {
             .build(test_job);
 
         worker.run().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workflow() {
+        let env = std::env::var("AMQP_ADDR").unwrap();
+        // let mut backend = AmqpBackend::new_from_addr(&env).await.unwrap();
+
+        // let workflow = Workflow::new("odd-numbers-workflow")
+        //     .and_then(|a: usize| async move { Ok::<_, BoxDynError>((0..a).collect::<Vec<_>>()) })
+        //     .filter_map(|x| async move {
+        //         if x % 2 != 0 {
+        //             Some(x)
+        //         } else {
+        //             None
+        //         }
+        //     })
+        //     .and_then(|a: Vec<usize>| async move {
+        //         println!("Sum: {}", a.iter().sum::<usize>());
+        //         Ok::<_, BoxDynError>(())
+        //     });
+
+
+        // TODO: @geoffreymureithi - Implement GenerateId for u{}
+        // backend.push_start(10).await.unwrap();
+
+        // let worker = WorkerBuilder::new("rango-tango")
+        //     .backend(backend)
+        //     .on_event(|ctx, ev| {
+        //         println!("On Event = {:?}", ev);
+        //     })
+        //     .build(workflow);
+        // worker.run().await.unwrap();
     }
 }

@@ -1,7 +1,7 @@
 <h1 align="center">apalis-amqp</h1>
 <div align="center">
  <strong>
-   Message queuing for Rust using apalis and AMQP.
+   Background message processing for Rust using `apalis` and the `amqp` protocol.
  </strong>
 </div>
 

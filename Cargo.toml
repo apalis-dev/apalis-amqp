@@ -13,8 +13,6 @@ categories = ["database"]
 
 [dependencies]
 apalis-core = { version = "1.0.0-beta.2", features = ["json", "sleep"] }
-serde = "1"
-serde_json = "1"
 deadpool = "0.12.0"
 deadpool-lapin = "0.13.1"
 lapin = "3.6.0"
@@ -22,6 +20,7 @@ futures = { version = "0.3.30", default-features = true }
 tower = "0.5"
 tracing = "0.1"
 pin-project = "1.0"
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -30,7 +29,7 @@ apalis = { version = "1.0.0-beta.2", default-features = false, features = [
     "retry",
 ] }
 futures-util = "0.3"
-serde_json = "1"
+apalis-workflow = { version = "0.1.0-beta.2" }
 
 [lib]
 doc-scrape-examples = true
