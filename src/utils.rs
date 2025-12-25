@@ -2,7 +2,7 @@ use apalis_codec::json::JsonCodec;
 use apalis_core::backend::codec::Codec;
 use apalis_core::task::metadata::MetadataExt;
 use apalis_core::task_fn::FromRequest;
-use lapin::{types::ByteArray, BasicProperties};
+use lapin::{BasicProperties, types::{ByteArray, FieldTable}};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{convert::Infallible, time::Duration};
 
@@ -104,7 +104,7 @@ impl<T: DeserializeOwned + Serialize> MetadataExt<T> for AmqpContext {
         self.properties
             .headers()
             .as_ref()
-            .unwrap()
+            .unwrap_or(&FieldTable::default())
             .inner()
             .get(std::any::type_name::<T>())
             .ok_or(
