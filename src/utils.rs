@@ -127,7 +127,12 @@ impl<T: DeserializeOwned + Serialize> MetadataExt<T> for AmqpContext {
             })
     }
     fn inject(&mut self, value: T) -> Result<(), lapin::Error> {
-        let mut cur = self.properties.headers().as_ref().unwrap().clone();
+        let mut cur = self
+            .properties
+            .headers()
+            .as_ref()
+            .unwrap_or(&FieldTable::default())
+            .clone();
         cur.insert(
             std::any::type_name::<T>().into(),
             lapin::types::AMQPValue::ByteArray(ByteArray::from(
