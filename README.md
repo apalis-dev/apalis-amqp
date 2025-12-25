@@ -95,7 +95,7 @@ Then add to your main.rs
  #[tokio::main]
  async fn main() {
     let env = std::env::var("AMQP_ADDR").unwrap();
-    let mq = AmqpBackend::new_from_addr(&env).await.unwrap();
+    let mut mq = AmqpBackend::new_from_addr(&env).await.unwrap();
 
     mq.push(TestMessage(42)).await.unwrap();
     
