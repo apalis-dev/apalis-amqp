@@ -311,7 +311,7 @@ mod tests {
 
         let workflow = Workflow::new("odd-numbers-workflow")
             .and_then(|a: usize| async move { Ok::<_, BoxDynError>((0..a).collect::<Vec<_>>()) })
-            // Cant do filter_map coz Amqp doesnt implement WaitForCompletion
+            // Cant do filter_map coz Amqp doesnt implement WaitForCompletion yet
             // .filter_map(|x| async move {
             //     if x % 2 != 0 {
             //         Some(x)
@@ -319,8 +319,9 @@ mod tests {
             //         None
             //     }
             // })
-            .and_then(|a: Vec<usize>| async move {
+            .and_then(|a: Vec<usize>, ctx: WorkerContext| async move {
                 println!("Sum: {}", a.iter().sum::<usize>());
+                ctx.stop().unwrap();
                 Ok::<_, BoxDynError>(())
             });
         backend.push_start(10).await.unwrap();
