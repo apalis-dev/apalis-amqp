@@ -1,13 +1,16 @@
 use std::{
     collections::VecDeque,
     fmt::Debug,
-    future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
 use apalis_core::backend::codec::Codec;
-use futures::{FutureExt, Sink};
+use futures::{
+    future::{BoxFuture, Shared},
+    FutureExt, Sink,
+};
 use lapin::{options::BasicPublishOptions, publisher_confirm::Confirmation};
 
 use crate::{AmqpBackend, AmqpTask};
@@ -42,7 +45,7 @@ impl<T, C> AmqpSink<T, C> {
 }
 
 struct PendingSend {
-    future: Pin<Box<dyn Future<Output = Result<Confirmation, lapin::Error>> + Send + 'static>>,
+    future: Shared<BoxFuture<'static, Result<Arc<Confirmation>, Arc<lapin::Error>>>>,
 }
 
 impl Debug for PendingSend {
@@ -64,14 +67,16 @@ where
 
         // Poll pending sends
         while let Some(pending) = sink.pending_sends.front_mut() {
-            match pending.future.as_mut().poll(cx) {
+            match pending.future.poll_unpin(cx) {
                 Poll::Ready(Ok(_)) => {
                     sink.pending_sends.pop_front();
-                    println!("Completed pending send to RSMQ");
+                    tracing::debug!("Completed pending send to Amqp");
                 }
                 Poll::Ready(Err(e)) => {
                     sink.pending_sends.pop_front();
-                    return Poll::Ready(Err(e));
+                    return Poll::Ready(Err(
+                        Arc::into_inner(e).expect("Error must not be already taken")
+                    ));
                 }
                 Poll::Pending => {
                     return Poll::Pending;
@@ -115,21 +120,24 @@ where
                     )
                     .await?
                     .await?;
-                Ok(confirmation)
+                Ok(Arc::new(confirmation))
             }
-            .boxed();
+            .boxed()
+            .shared();
             sink.pending_sends.push_back(PendingSend { future });
         }
 
         // Now poll all pending sends
         while let Some(pending) = sink.pending_sends.front_mut() {
-            match pending.future.as_mut().poll(cx) {
+            match pending.future.poll_unpin(cx) {
                 Poll::Ready(Ok(_)) => {
                     sink.pending_sends.pop_front();
                 }
                 Poll::Ready(Err(e)) => {
                     sink.pending_sends.pop_front();
-                    return Poll::Ready(Err(e));
+                    return Poll::Ready(Err(
+                        Arc::into_inner(e).expect("Error must not be already taken")
+                    ));
                 }
                 Poll::Pending => {
                     return Poll::Pending;

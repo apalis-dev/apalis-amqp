@@ -28,16 +28,18 @@
 
 ## Overview
 
-`apalis-amqp` is a Rust crate that provides utilities for integrating `apalis` with AMQP message queuing systems. It includes an `AmqpBackend` implementation for use with the pushing and popping messages.
+`apalis-amqp` provides utilities for integrating `apalis` with AMQP message queuing systems. It includes an `AmqpBackend` implementation for use with the pushing and popping messages.
 
 ## Features
 
 - Integration between apalis and AMQP message queuing systems.
 - Easy creation of AMQP-backed message queues.
 - Simple consumption of AMQP messages as apalis messages.
-- Supports message acknowledgement and rejection via `tower` layers.
+- Supports message acknowledgement and rejection.
 - Supports all apalis middleware such as rate-limiting, timeouts, filtering, sentry, prometheus etc.
-- Supports ack messages and allows custom saving results to other backends
+- Supports persisting results to databases like `redis`, `postgres` and `sqlite` among others.
+- Partial support for sequential workflows.
+
 
 ## Getting started
 
@@ -45,7 +47,7 @@ Before attempting to connect, you need a working amqp backend. We can easily set
 
 ### Setup RabbitMq
 
-```
+```sh
 docker run -p 15672:15672 -p 5672:5672 -e RABBITMQ_DEFAULT_USER=my_user -e RABBITMQ_DEFAULT_PASS=******** rabbitmq:3.8.4-management
 
 # Setup a Vhost
@@ -57,7 +59,7 @@ docker exec $(docker ps -q -f ancestor=rabbitmq:3.8.4-management) rabbitmqctl se
 
 #### Enabling scheduling (Optional)
 
-```
+```sh
 docker exec $(docker ps -q -f ancestor=rabbitmq:3.8.4-management) rabbitmq-plugins directories -s
 
 wget https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases/download/3.8.17/rabbitmq_delayed_message_exchange-3.8.17.8f537ac.ez
@@ -66,7 +68,7 @@ docker cp rabbitmq_delayed_message_exchange-4.1.0.ez \
   $(docker ps -q -f ancestor=rabbitmq:3.8.4-management):/opt/rabbitmq/plugins/
 ```
 
-### Setup the rust code
+### Basic example
 
 Add apalis-amqp to your Cargo.toml
 
@@ -79,7 +81,7 @@ serde = "1"
 
 Then add to your main.rs
 
-```rust
+```rust,no_run
  use apalis::prelude::*;
  use apalis_amqp::AmqpBackend;
  use serde::{Deserialize, Serialize};
@@ -94,9 +96,8 @@ Then add to your main.rs
  #[tokio::main]
  async fn main() {
     let env = std::env::var("AMQP_ADDR").unwrap();
-    let mq = AmqpBackend::<TestMessage>::new_from_addr(&env).await.unwrap();
+    let mq = AmqpBackend::new_from_addr(&env).await.unwrap();
 
-     // This can be in another place in the program
     mq.push(TestMessage(42)).await.unwrap();
     
     WorkerBuilder::new("rango-amigo")
@@ -108,8 +109,41 @@ Then add to your main.rs
  }
 ```
 
-Run your code and profit!
+### Workflow Example
+
+```rs,no_run
+use apalis::prelude::*;
+use apalis_amqp::AmqpBackend;
+use apalis_workflow::{Workflow, WorkflowSink};
+
+#[tokio::main]
+async fn main() {
+    let env = std::env::var("AMQP_ADDR").unwrap();
+    let mut backend = AmqpBackend::new_from_addr(&env).await.unwrap();
+
+    let workflow = Workflow::new("odd-numbers-workflow")
+        .and_then(|a: usize| async move { Ok::<_, BoxDynError>((0..a).collect::<Vec<_>>()) })
+        .and_then(|a: Vec<usize>| async move {
+            println!("Sum: {}", a.iter().sum::<usize>());
+            Ok::<_, BoxDynError>(())
+        });
+    backend.push_start(10).await.unwrap();
+
+    let worker = WorkerBuilder::new("rango-tango")
+        .backend(backend)
+        .on_event(|_ctx, ev| {
+            println!("On Event = {:?}", ev);
+        })
+        .build(workflow);
+    worker.run().await.unwrap();
+}
+```
+
+## Observability
+
+You can track your tasks using [apalis-board](https://github.com/apalis-dev/apalis-board).
+![Task](https://github.com/apalis-dev/apalis-board/raw/main/screenshots/task.png)
 
 ## License
 
-apalis-amqp is licensed under the Apache license. See the LICENSE file for details.
+`apalis-amqp` is licensed under the Apache license. See the LICENSE file for details.

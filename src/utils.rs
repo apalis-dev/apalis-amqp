@@ -1,6 +1,7 @@
-use apalis_core::backend::{codec::json::JsonCodec, codec::Codec};
-use apalis_core::task_fn::FromRequest;
+use apalis_codec::json::JsonCodec;
+use apalis_core::backend::codec::Codec;
 use apalis_core::task::metadata::MetadataExt;
+use apalis_core::task_fn::FromRequest;
 use lapin::{types::ByteArray, BasicProperties};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{convert::Infallible, time::Duration};
