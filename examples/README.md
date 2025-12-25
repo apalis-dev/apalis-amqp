@@ -1,5 +1,5 @@
 ## Example
-How to run the basic example.
+How to run the examples
 
 ### Setup RabbitMq
 ```

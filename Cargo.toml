@@ -1,6 +1,6 @@
 [package]
 name = "apalis-amqp"
-version = "1.0.0-alpha.1"
+version = "1.0.0-rc.1"
 edition = "2021"
 description = "Message queuing backend for Rust using apalis and Amqp"
 authors = ["Geoffrey Mureithi <mureithinjuguna@gmail.com>"]
@@ -12,9 +12,7 @@ keywords = ["worker", "amqp", "rabbitmq", "queue", "apalis"]
 categories = ["database"]
 
 [dependencies]
-apalis-core = { version = "1.0.0-alpha.8", features = ["json", "sleep"] }
-serde = "1"
-serde_json = "1"
+apalis-core = { version = "1.0.0-rc.1", features = ["sleep"] }
 deadpool = "0.12.0"
 deadpool-lapin = "0.13.1"
 lapin = "3.6.0"
@@ -22,14 +20,17 @@ futures = { version = "0.3.30", default-features = true }
 tower = "0.5"
 tracing = "0.1"
 pin-project = "1.0"
+serde = { version = "1", features = ["derive"] }
+apalis-codec = { version = "0.1.0-rc.1", features = ["json"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-apalis-core = { version = "1.0.0-alpha.8" }
-apalis = { version = "1.0.0-alpha.8", default-features = false, features = [
+apalis-core = { version = "1.0.0-rc.1" }
+apalis = { version = "1.0.0-rc.1", default-features = false, features = [
     "retry",
 ] }
 futures-util = "0.3"
+apalis-workflow = { version = "0.1.0-rc.1", features = ["rand"] } # rand required for u64 generation
 
 
 [lib]
@@ -37,6 +38,3 @@ doc-scrape-examples = true
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "doc_cfg"]
-
-[workspace]
-members = ["examples/basic"]

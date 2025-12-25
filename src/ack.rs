@@ -4,8 +4,8 @@ use lapin::{options::BasicAckOptions, Error};
 
 use crate::{utils::AmqpContext, AmqpBackend};
 
-impl<M: Send + 'static, Res: Send + Sync + 'static> Acknowledge<Res, AmqpContext, u64>
-    for AmqpBackend<M>
+impl<M: Send + 'static, Res: Send + Sync + 'static, C> Acknowledge<Res, AmqpContext, u64>
+    for AmqpBackend<M, C>
 {
     type Error = Error;
     type Future = BoxFuture<'static, Result<(), Error>>;

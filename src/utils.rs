@@ -1,6 +1,15 @@
-use lapin::BasicProperties;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use apalis_codec::json::JsonCodec;
+use apalis_core::backend::codec::Codec;
+use apalis_core::task::metadata::MetadataExt;
+use apalis_core::task_fn::FromRequest;
+use lapin::{
+    types::{ByteArray, FieldTable},
+    BasicProperties,
+};
+use serde::{de::DeserializeOwned, Serialize};
+use std::{convert::Infallible, time::Duration};
+
+use crate::AmqpTask;
 
 /// Config for the backend
 #[derive(Clone, Debug)]
@@ -52,7 +61,7 @@ impl Config {
 }
 
 /// The context of a message
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct AmqpContext {
     tag: DeliveryTag,
     properties: BasicProperties,
@@ -85,7 +94,57 @@ impl AmqpContext {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+impl<Args: Sync> FromRequest<AmqpTask<Args>> for AmqpContext {
+    type Error = Infallible;
+    async fn from_request(req: &AmqpTask<Args>) -> Result<Self, Self::Error> {
+        Ok(req.parts.ctx.clone())
+    }
+}
+
+impl<T: DeserializeOwned + Serialize> MetadataExt<T> for AmqpContext {
+    type Error = lapin::Error;
+    fn extract(&self) -> Result<T, lapin::Error> {
+        self.properties
+            .headers()
+            .as_ref()
+            .unwrap_or(&FieldTable::default())
+            .inner()
+            .get(std::any::type_name::<T>())
+            .ok_or(
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid metadata type")
+                    .into(),
+            )
+            .and_then(|v| match v {
+                lapin::types::AMQPValue::ByteArray(bytes) => {
+                    JsonCodec::<Vec<u8>>::decode(&bytes.as_slice().to_vec())
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e).into())
+                }
+                _ => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid metadata format",
+                )
+                .into()),
+            })
+    }
+    fn inject(&mut self, value: T) -> Result<(), lapin::Error> {
+        let mut cur = self
+            .properties
+            .headers()
+            .as_ref()
+            .unwrap_or(&FieldTable::default())
+            .clone();
+        cur.insert(
+            std::any::type_name::<T>().into(),
+            lapin::types::AMQPValue::ByteArray(ByteArray::from(
+                JsonCodec::<Vec<u8>>::encode(&value).unwrap(),
+            )),
+        );
+        self.properties = self.properties.clone().with_headers(cur);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 /// A wrapper for the message to be acknowledged.
 pub struct DeliveryTag(u64);
 

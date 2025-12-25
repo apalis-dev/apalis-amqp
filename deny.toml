@@ -1,0 +1,32 @@
+[graph]
+exclude-unpublished = true
+
+[advisories]
+unmaintained = "none"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "BSD-2-Clause",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "MIT",
+    "Unicode-3.0",
+    "ISC",
+    "OpenSSL"
+]
+
+[bans]
+multiple-versions = "deny"
+highlight = "all"
+skip-tree = [
+    # TODO: @geofmureithi Understand why lapin is pulling in different versions
+    { name = "nom" },
+    { name = "reactor-trait" },
+]
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-git = []
