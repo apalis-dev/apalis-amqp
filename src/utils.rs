@@ -3,6 +3,7 @@ use apalis_core::backend::codec::Codec;
 use apalis_core::task::metadata::MetadataExt;
 use apalis_core::task_fn::FromRequest;
 use lapin::{
+    options::{BasicQosOptions, QueueDeclareOptions},
     types::{ByteArray, FieldTable},
     BasicProperties,
 };
@@ -11,12 +12,33 @@ use std::{convert::Infallible, time::Duration};
 
 use crate::AmqpTask;
 
+/// QoS options for the AMQP consumer.
+#[derive(Clone, Debug)]
+pub struct QosOptions {
+    /// The maximum number of unacknowledged messages to prefetch.
+    /// Default is 10. A value of 0 means unlimited (not recommended).
+    pub prefetch_count: u16,
+    /// Additional QoS options from lapin.
+    pub options: BasicQosOptions,
+}
+
+impl Default for QosOptions {
+    fn default() -> Self {
+        Self {
+            prefetch_count: 10,
+            options: BasicQosOptions::default(),
+        }
+    }
+}
+
 /// Config for the backend
 #[derive(Clone, Debug)]
 pub struct Config {
     max_retries: usize,
     namespace: String,
     heartbeat_interval: Duration,
+    qos_options: QosOptions,
+    declare_options: QueueDeclareOptions,
 }
 
 impl Config {
@@ -26,6 +48,8 @@ impl Config {
             max_retries: 25,
             namespace: namespace.to_owned(),
             heartbeat_interval: Duration::from_secs(60),
+            qos_options: QosOptions::default(),
+            declare_options: QueueDeclareOptions::default(),
         }
     }
 
@@ -57,6 +81,26 @@ impl Config {
     /// Sets the heartbeat interval.
     pub fn set_heartbeat_interval(&mut self, interval: Duration) {
         self.heartbeat_interval = interval;
+    }
+
+    /// Gets the QoS options.
+    pub fn qos_options(&self) -> &QosOptions {
+        &self.qos_options
+    }
+
+    /// Sets the QoS options.
+    pub fn set_qos_options(&mut self, qos_options: QosOptions) {
+        self.qos_options = qos_options;
+    }
+
+    /// Gets the queue declaration options.
+    pub fn declare_options(&self) -> QueueDeclareOptions {
+        self.declare_options
+    }
+
+    /// Sets the queue declaration options.
+    pub fn set_declare_options(&mut self, options: QueueDeclareOptions) {
+        self.declare_options = options;
     }
 }
 

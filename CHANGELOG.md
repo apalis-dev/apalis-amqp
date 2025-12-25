@@ -2,6 +2,7 @@
 
 ### 💼 Other
 
+- Add QoS and queue declaration configuration options (#41)
 - Cargo vet supply chain
 
 ### ⚙️ Miscellaneous Tasks

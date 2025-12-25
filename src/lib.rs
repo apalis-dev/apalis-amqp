@@ -34,10 +34,8 @@ use futures::{
     Stream, StreamExt, TryStreamExt,
 };
 use lapin::{
-    message::Delivery,
-    options::{BasicConsumeOptions, QueueDeclareOptions},
-    types::FieldTable,
-    Channel, ConnectionProperties, Error, ErrorKind,
+    message::Delivery, options::BasicConsumeOptions, types::FieldTable, Channel,
+    ConnectionProperties, Error, ErrorKind,
 };
 use pin_project::pin_project;
 use std::{
@@ -186,6 +184,12 @@ impl<M, C> AmqpBackend<M, C> {
         let worker_name = worker.name().to_string();
 
         let stream = stream::once(async move {
+            // Set QoS/prefetch before consuming to limit memory usage
+            let qos = config.qos_options();
+            if qos.prefetch_count > 0 {
+                channel.basic_qos(qos.prefetch_count, qos.options).await?;
+            }
+
             let consumer = channel
                 .basic_consume(
                     config.namespace().as_str(),
@@ -244,6 +248,17 @@ impl<M: Send + 'static> AmqpBackend<M, ()> {
     pub async fn new_from_addr<S: AsRef<str>>(
         addr: S,
     ) -> Result<AmqpBackend<M, JsonCodec<Vec<u8>>>, lapin::Error> {
+        let config = Config::new(std::any::type_name::<M>());
+        Self::new_from_addr_with_config(addr, config).await
+    }
+
+    /// Constructs a new instance of `AmqpBackend` from an address string with custom config.
+    ///
+    /// This allows customizing QoS settings, queue declaration options, and other settings.
+    pub async fn new_from_addr_with_config<S: AsRef<str>>(
+        addr: S,
+        config: Config,
+    ) -> Result<AmqpBackend<M, JsonCodec<Vec<u8>>>, lapin::Error> {
         let manager = Manager::new(addr.as_ref(), ConnectionProperties::default());
         let pool: Pool = deadpool::managed::Pool::builder(manager)
             .max_size(10)
@@ -263,12 +278,12 @@ impl<M: Send + 'static> AmqpBackend<M, ()> {
         let channel = amqp_conn.create_channel().await?;
         let queue = channel
             .queue_declare(
-                std::any::type_name::<M>(),
-                QueueDeclareOptions::default(),
+                config.namespace(),
+                config.declare_options(),
                 FieldTable::default(),
             )
             .await?;
-        Ok(Self::new(channel, queue))
+        Ok(Self::new_with_config(channel, queue, config))
     }
 }
 
