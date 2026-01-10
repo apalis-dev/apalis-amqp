@@ -1,9 +1,10 @@
-## [unreleased]
+## [Unreleased]
 
 ### 💼 Other
 
 - Add QoS and queue declaration configuration options (#41)
 - Cargo vet supply chain
+- deps(deps): bump tokio from 1.48.0 to 1.49.0 (#45) 
 
 ### ⚙️ Miscellaneous Tasks
 
