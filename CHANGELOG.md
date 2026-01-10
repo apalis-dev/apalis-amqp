@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [1.0.0-rc.2] - 2026-01-10
+
 ### 💼 Other
 
 - Add QoS and queue declaration configuration options (#41)
@@ -11,6 +13,7 @@
 - Add lockfile
 - Streamline workflow
 - Remove windows and mac matrices
+
 ## [1.0.0-alpha.1] - 2025-11-01
 
 ### 🐛 Bug Fixes
