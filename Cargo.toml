@@ -21,7 +21,7 @@ tower = "0.5"
 tracing = "0.1"
 pin-project = "1.0"
 serde = { version = "1", features = ["derive"] }
-apalis-codec = { version = "0.1.0-rc.4", features = ["json"] }
+apalis-codec = { version = "0.1.0-rc.6", features = ["json"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
