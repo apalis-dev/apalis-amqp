@@ -13,8 +13,7 @@ allow = [
     "BSD-3-Clause",
     "MIT",
     "Unicode-3.0",
-    "ISC",
-    "OpenSSL"
+    "ISC"
 ]
 
 [bans]
@@ -24,6 +23,9 @@ skip-tree = [
     # TODO: @geofmureithi Understand why lapin is pulling in different versions
     { name = "nom" },
     { name = "reactor-trait" },
+    { name = "r-efi" },
+    { name = "getrandom" },
+    { name = "cpufeatures" }
 ]
 
 [sources]
