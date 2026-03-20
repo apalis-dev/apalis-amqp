@@ -1,8 +1,9 @@
 ## [Unreleased]
 
-## [1.0.0-rc.6] - 2026-02-21
+## [1.0.0-rc.6] - 2026-03-20
 
 - _bump_: to v1.0.0-rc.6
+- _chore_: improve readme and examples
 
 ## [1.0.0-rc.4] - 2026-02-21
 
