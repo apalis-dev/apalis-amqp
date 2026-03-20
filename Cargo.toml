@@ -33,7 +33,7 @@ futures-util = "0.3"
 apalis-workflow = { version = "0.1.0-rc.6", features = [
     "rand",
 ] } # rand required for u64 generation
-
+tokio-rusqlite = "0.7.0"
 
 [lib]
 doc-scrape-examples = true

@@ -211,6 +211,10 @@ criteria = "safe-to-deploy"
 version = "0.3.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.crossbeam-channel]]
+version = "0.5.15"
+criteria = "safe-to-run"
+
 [[exemptions.crossbeam-utils]]
 version = "0.8.21"
 criteria = "safe-to-deploy"
@@ -290,6 +294,14 @@ criteria = "safe-to-deploy"
 [[exemptions.executor-trait]]
 version = "3.1.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.fallible-iterator]]
+version = "0.3.0"
+criteria = "safe-to-run"
+
+[[exemptions.fallible-streaming-iterator]]
+version = "0.1.9"
+criteria = "safe-to-run"
 
 [[exemptions.fastrand]]
 version = "2.3.0"
@@ -395,6 +407,10 @@ criteria = "safe-to-deploy"
 version = "0.16.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.hashlink]]
+version = "0.10.0"
+criteria = "safe-to-run"
+
 [[exemptions.heck]]
 version = "0.5.0"
 criteria = "safe-to-deploy"
@@ -486,6 +502,10 @@ criteria = "safe-to-deploy"
 [[exemptions.libc]]
 version = "0.2.183"
 criteria = "safe-to-deploy"
+
+[[exemptions.libsqlite3-sys]]
+version = "0.35.0"
+criteria = "safe-to-run"
 
 [[exemptions.linux-raw-sys]]
 version = "0.12.1"
@@ -611,6 +631,10 @@ criteria = "safe-to-deploy"
 version = "0.7.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.pkg-config]]
+version = "0.3.32"
+criteria = "safe-to-run"
+
 [[exemptions.polling]]
 version = "3.11.0"
 criteria = "safe-to-deploy"
@@ -686,6 +710,10 @@ criteria = "safe-to-deploy"
 [[exemptions.ring]]
 version = "0.17.14"
 criteria = "safe-to-deploy"
+
+[[exemptions.rusqlite]]
+version = "0.37.0"
+criteria = "safe-to-run"
 
 [[exemptions.rusticata-macros]]
 version = "4.1.0"
@@ -867,6 +895,10 @@ criteria = "safe-to-deploy"
 version = "3.9.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.tokio-rusqlite]]
+version = "0.7.0"
+criteria = "safe-to-run"
+
 [[exemptions.tokio-stream]]
 version = "0.1.18"
 criteria = "safe-to-deploy"
@@ -926,6 +958,10 @@ criteria = "safe-to-deploy"
 [[exemptions.utf8_iter]]
 version = "1.0.4"
 criteria = "safe-to-deploy"
+
+[[exemptions.vcpkg]]
+version = "0.2.15"
+criteria = "safe-to-run"
 
 [[exemptions.version_check]]
 version = "0.9.5"
