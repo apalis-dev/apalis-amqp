@@ -54,6 +54,8 @@ async fn try_reconnect(
     config: &Config,
     worker_name: &str,
 ) -> Result<Channel, lapin::Error> {
+    apalis_core::timer::sleep(config.reconnection_delay()).await;
+
     let amqp_conn = pool.get().await.map_err(|error| {
         lapin::ErrorKind::IOError(Arc::new(io::Error::new(
             io::ErrorKind::ConnectionRefused,
