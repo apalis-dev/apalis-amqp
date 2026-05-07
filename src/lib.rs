@@ -5,7 +5,7 @@
     clippy::await_holding_lock,
     clippy::cargo_common_metadata,
     clippy::dbg_macro,
-    clippy::empty_enum,
+    clippy::empty_enums,
     clippy::enum_glob_use,
     clippy::inefficient_to_string,
     clippy::mem_forget,
@@ -42,9 +42,44 @@ use std::{
     io::{self},
     marker::PhantomData,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 use utils::{AmqpContext, Config, DeliveryTag};
+
+/// Creates a new channel from the pool, re-declares the queue, and updates
+/// `channel_lock` if the previous channel is disconnected.
+async fn try_reconnect(
+    pool: &Pool,
+    channel_lock: &Arc<RwLock<Channel>>,
+    config: &Config,
+    worker_name: &str,
+) -> Result<Channel, lapin::Error> {
+    apalis_core::timer::sleep(config.reconnection_delay()).await;
+
+    let amqp_conn = pool.get().await.map_err(|error| {
+        lapin::ErrorKind::IOError(Arc::new(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            error,
+        )))
+    })?;
+
+    let new_channel = amqp_conn.create_channel().await?;
+    let _ = new_channel
+        .queue_declare(
+            config.namespace(),
+            config.declare_options(),
+            FieldTable::default(),
+        )
+        .await?;
+
+    let mut guard = channel_lock.write().unwrap_or_else(|e| e.into_inner());
+    if !guard.status().connected() {
+        *guard = new_channel.clone();
+        tracing::info!("Reconnected channel for worker {worker_name}");
+    }
+
+    Ok(new_channel)
+}
 
 /// Contains basic utilities for handling config and messages
 pub mod utils;
@@ -59,7 +94,8 @@ pub type AmqpTaskId = TaskId<u64>;
 /// A wrapper around a `lapin` AMQP channel that implements message queuing functionality.
 #[pin_project]
 pub struct AmqpBackend<M, Codec> {
-    channel: Channel,
+    pool: Pool,
+    channel: Arc<RwLock<Channel>>,
     queue: lapin::Queue,
     message_type: PhantomData<M>,
     config: Config,
@@ -70,7 +106,8 @@ pub struct AmqpBackend<M, Codec> {
 impl<M, C> Clone for AmqpBackend<M, C> {
     fn clone(&self) -> Self {
         Self {
-            channel: self.channel.clone(),
+            pool: self.pool.clone(),
+            channel: Arc::clone(&self.channel),
             queue: self.queue.clone(),
             message_type: PhantomData,
             config: self.config.clone(),
@@ -92,26 +129,23 @@ where
     type Context = AmqpContext;
     type IdType = u64;
     fn heartbeat(&self, worker: &WorkerContext) -> Self::Beat {
-        let channel = self.channel.clone();
+        let channel = Arc::clone(&self.channel);
         let worker = worker.clone();
         let config = self.config.clone();
         let stream = stream::unfold(
             (channel, worker, config),
             move |(channel, worker, config)| async move {
                 apalis_core::timer::sleep(config.heartbeat_interval()).await;
-                let is_connected = channel.status().connected();
+                let is_connected = channel
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .status()
+                    .connected();
+
                 if !is_connected {
-                    Some((
-                        Err(ErrorKind::IOError(Arc::new(io::Error::new(
-                            io::ErrorKind::NotConnected,
-                            format!("Channel not connected for worker {}", worker.name()),
-                        )))
-                        .into()),
-                        (channel, worker, config),
-                    ))
-                } else {
-                    Some((Ok(()), (channel, worker, config)))
+                    tracing::warn!("Channel not connected for worker {}. Waiting for poll_delivery to reconnect.", worker.name());
                 }
+                Some((Ok(()), (channel, worker, config)))
             },
         );
         stream.boxed()
@@ -178,19 +212,31 @@ impl<M, C> AmqpBackend<M, C> {
         self,
         worker: &WorkerContext,
     ) -> impl Stream<Item = Result<Delivery, Error>> + 'static {
-        let channel = self.channel.clone();
-        let worker = worker.clone();
+        let pool = self.pool.clone();
+        let channel = Arc::clone(&self.channel);
         let config = self.config.clone();
         let worker_name = worker.name().to_string();
 
         let stream = stream::once(async move {
+            // If the stored channel is dead, reconnect it.
+            let ch = if channel
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .status()
+                .connected()
+            {
+                channel.read().unwrap_or_else(|e| e.into_inner()).clone()
+            } else {
+                try_reconnect(&pool, &channel, &config, &worker_name).await?
+            };
+
             // Set QoS/prefetch before consuming to limit memory usage
             let qos = config.qos_options();
             if qos.prefetch_count > 0 {
-                channel.basic_qos(qos.prefetch_count, qos.options).await?;
+                ch.basic_qos(qos.prefetch_count, qos.options).await?;
             }
 
-            let consumer = channel
+            let consumer = ch
                 .basic_consume(
                     config.namespace().as_str(),
                     &worker_name,
@@ -207,28 +253,42 @@ impl<M, C> AmqpBackend<M, C> {
 
 impl<M: Send + 'static> AmqpBackend<M, ()> {
     /// Constructs a new instance of `AmqpBackend` from a `lapin` channel.
-    pub fn new(channel: Channel, queue: lapin::Queue) -> AmqpBackend<M, JsonCodec<Vec<u8>>> {
-        Self::new_with_config(channel, queue, Config::new(std::any::type_name::<M>()))
+    pub fn new(
+        pool: Pool,
+        channel: Channel,
+        queue: lapin::Queue,
+    ) -> AmqpBackend<M, JsonCodec<Vec<u8>>> {
+        Self::new_with_config(
+            pool,
+            channel,
+            queue,
+            Config::new(std::any::type_name::<M>()),
+        )
     }
 
     /// Constructs a new instance of `AmqpBackend` with a config
     pub fn new_with_config(
+        pool: Pool,
         channel: Channel,
         queue: lapin::Queue,
         config: Config,
     ) -> AmqpBackend<M, JsonCodec<Vec<u8>>> {
         AmqpBackend {
+            pool,
             sink: sink::AmqpSink::new(),
-            channel,
+            channel: Arc::new(RwLock::new(channel)),
             message_type: PhantomData,
             queue,
             config,
         }
     }
 
-    /// Get a ref to the inner `Channel`
-    pub fn channel(&self) -> &Channel {
-        &self.channel
+    /// Get a clone of the inner `Channel`
+    pub fn channel(&self) -> Channel {
+        self.channel
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Get a ref to the inner `Queue`
@@ -283,7 +343,7 @@ impl<M: Send + 'static> AmqpBackend<M, ()> {
                 FieldTable::default(),
             )
             .await?;
-        Ok(Self::new_with_config(channel, queue, config))
+        Ok(Self::new_with_config(pool, channel, queue, config))
     }
 }
 

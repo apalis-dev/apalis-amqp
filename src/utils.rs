@@ -39,6 +39,7 @@ pub struct Config {
     heartbeat_interval: Duration,
     qos_options: QosOptions,
     declare_options: QueueDeclareOptions,
+    reconnection_delay: Duration,
 }
 
 impl Config {
@@ -50,6 +51,7 @@ impl Config {
             heartbeat_interval: Duration::from_secs(60),
             qos_options: QosOptions::default(),
             declare_options: QueueDeclareOptions::default(),
+            reconnection_delay: Duration::from_secs(3),
         }
     }
 
@@ -101,6 +103,16 @@ impl Config {
     /// Sets the queue declaration options.
     pub fn set_declare_options(&mut self, options: QueueDeclareOptions) {
         self.declare_options = options;
+    }
+
+    /// Gets the heartbeat interval.
+    pub fn reconnection_delay(&self) -> Duration {
+        self.reconnection_delay
+    }
+
+    /// Sets the heartbeat interval.
+    pub fn set_reconnection_delay(&mut self, delay: Duration) {
+        self.reconnection_delay = delay;
     }
 }
 

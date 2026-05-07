@@ -14,7 +14,11 @@ impl<M: Send + 'static, Res: Send + Sync + 'static, C> Acknowledge<Res, AmqpCont
         res: &Result<Res, BoxDynError>,
         parts: &Parts<AmqpContext, u64>,
     ) -> Self::Future {
-        let channel = self.channel.clone();
+        let channel = self
+            .channel
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let tag = parts.ctx.tag().value();
         let is_ok = res.is_ok();
         async move {

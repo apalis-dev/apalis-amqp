@@ -96,7 +96,11 @@ where
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let namespace = self.config.namespace().to_owned();
-        let channel = self.channel.clone();
+        let channel = self
+            .channel
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let sink = self.project().sink.project();
 
         // First, convert any queued items to pending sends
