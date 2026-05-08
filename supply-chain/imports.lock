@@ -24,3 +24,7 @@ audited_as = "1.0.0-rc.4"
 [[unpublished.apalis-amqp]]
 version = "1.0.0-rc.7"
 audited_as = "1.0.0-rc.6"
+
+[[unpublished.apalis-amqp]]
+version = "1.0.0-rc.8"
+audited_as = "1.0.0-rc.7"

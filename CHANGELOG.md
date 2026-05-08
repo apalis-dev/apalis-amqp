@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+## [1.0.0-rc.8] - 2026-05-08
+
+- _feat_: automatic channel reconnection (#77)
+
 ## [1.0.0-rc.7] - 2026-04-11
 
 - _bump_: to v1.0.0-rc.7
