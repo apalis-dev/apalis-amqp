@@ -33,7 +33,7 @@ apalis = { version = "1.0.0-rc.10", default-features = false, features = [
 ] }
 futures-util = "0.3"
 apalis-workflow = { version = "0.1.0-rc.10" }
-tokio-rusqlite = "0.7.0"
+tokio-rusqlite = "0.8.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 
