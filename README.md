@@ -40,7 +40,6 @@
 - Supports persisting results to databases like `redis`, `postgres` and `sqlite` among others.
 - Partial support for sequential workflows.
 
-
 ## Getting started
 
 Before attempting to connect, you need a working amqp backend. We can easily setup using Docker:
@@ -48,24 +47,7 @@ Before attempting to connect, you need a working amqp backend. We can easily set
 ### Setup RabbitMq
 
 ```sh
-docker run -p 15672:15672 -p 5672:5672 -e RABBITMQ_DEFAULT_USER=my_user -e RABBITMQ_DEFAULT_PASS=******** rabbitmq:3.8.4-management
-
-# Setup a Vhost
-docker exec $(docker ps -q -f ancestor=rabbitmq:3.8.4-management) rabbitmqctl add_vhost my_vhost 
-
-# Add the Vhost  
-docker exec $(docker ps -q -f ancestor=rabbitmq:3.8.4-management) rabbitmqctl set_permissions -p my_vhost my_user ".*" ".*" ".*"
-```
-
-#### Enabling scheduling (Optional)
-
-```sh
-docker exec $(docker ps -q -f ancestor=rabbitmq:3.8.4-management) rabbitmq-plugins directories -s
-
-wget https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases/download/3.8.17/rabbitmq_delayed_message_exchange-3.8.17.8f537ac.ez
-
-docker cp rabbitmq_delayed_message_exchange-4.1.0.ez \
-  $(docker ps -q -f ancestor=rabbitmq:3.8.4-management):/opt/rabbitmq/plugins/
+docker run -p 15672:15672 -p 5672:5672 -e RABBITMQ_DEFAULT_USER=apalis -e RABBITMQ_DEFAULT_PASS=apalis rabbitmq:4-management
 ```
 
 ### Basic example
@@ -74,8 +56,8 @@ Add apalis-amqp to your Cargo.toml
 
 ```toml
 [dependencies]
-apalis = "1.0.0-rc.6"
-apalis-amqp = "1.0.0-rc.6"
+apalis = "1.0.0-rc.10"
+apalis-amqp = "1.0.0-rc.9"
 ```
 
 Then add to your main.rs
@@ -83,25 +65,21 @@ Then add to your main.rs
 ```rust,no_run
  use apalis::prelude::*;
  use apalis_amqp::AmqpBackend;
- use serde::{Deserialize, Serialize};
-
- #[derive(Debug, Serialize, Deserialize)]
- struct TestMessage(usize);
-
- async fn test_message(message: TestMessage) {
-     dbg!(message);
- }
 
  #[tokio::main]
  async fn main() {
     let env = std::env::var("AMQP_ADDR").unwrap();
-    let mut mq = AmqpBackend::new_from_addr(&env).await.unwrap();
+    let mut backend = AmqpBackend::new_from_addr(&env).unwrap();
 
-    mq.push(TestMessage(42)).await.unwrap();
-    
+    backend.push(42u32).await.unwrap();
+
+    async fn handle_message(task: u32) -> Result<(), BoxDynError> {
+        Ok(())
+    }
+
     WorkerBuilder::new("rango-amigo")
-      .backend(mq)
-      .build(test_message)
+      .backend(backend)
+      .build(handle_message)
       .run()
       .await
       .unwrap();
@@ -110,23 +88,23 @@ Then add to your main.rs
 
 ### Workflow Example
 
-```rs,no_run
+```rust,no_run
 use apalis::prelude::*;
 use apalis_amqp::AmqpBackend;
-use apalis_workflow::{Workflow, WorkflowSink};
+use apalis_workflow::SteppedFlow;
 
 #[tokio::main]
 async fn main() {
     let env = std::env::var("AMQP_ADDR").unwrap();
-    let mut backend = AmqpBackend::new_from_addr(&env).await.unwrap();
+    let mut backend = AmqpBackend::new_from_addr(&env).unwrap();
 
-    let workflow = Workflow::new("odd-numbers-workflow")
+    let workflow = SteppedFlow::new("odd-numbers-workflow")
         .and_then(|a: usize| async move { Ok::<_, BoxDynError>((0..a).collect::<Vec<_>>()) })
         .and_then(|a: Vec<usize>| async move {
             println!("Sum: {}", a.iter().sum::<usize>());
             Ok::<_, BoxDynError>(())
         });
-    backend.push_start(10).await.unwrap();
+    backend.push(10).await.unwrap();
 
     let worker = WorkerBuilder::new("rango-tango")
         .backend(backend)

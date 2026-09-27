@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+## [1.0.0-rc.9] - 2026-09-27
+
+- _bump_: lapin and rabbitmq to latest versions
+
 ## [1.0.0-rc.8] - 2026-05-08
 
 - _feat_: automatic channel reconnection (#77)
