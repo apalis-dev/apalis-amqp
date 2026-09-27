@@ -24,276 +24,376 @@ mod ack;
 mod sink;
 use apalis_codec::json::JsonCodec;
 use apalis_core::{
-    backend::{codec::Codec, queue::Queue, Backend, BackendExt, TaskStream},
+    backend::{
+        finalize::Durable, future::BoxSyncFuture, Backend, BackendConfig, WireFormatBackend,
+    },
     task::{builder::TaskBuilder, task_id::TaskId, Task},
+    timer::Delay,
     worker::{context::WorkerContext, ext::ack::AcknowledgeLayer},
 };
-use deadpool_lapin::{Manager, Pool};
-use futures::{
-    stream::{self, BoxStream},
-    Stream, StreamExt, TryStreamExt,
-};
+use deadpool_lapin::Pool;
+use futures::{FutureExt, StreamExt};
 use lapin::{
-    message::Delivery, options::BasicConsumeOptions, types::FieldTable, Channel,
-    ConnectionProperties, Error, ErrorKind,
+    options::{ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions},
+    types::{AMQPValue, FieldTable, ShortString},
+    Channel, Consumer, ExchangeKind,
 };
 use pin_project::pin_project;
 use std::{
-    io::{self},
-    marker::PhantomData,
-    str::FromStr,
-    sync::{Arc, RwLock},
+    future::Future,
+    pin::Pin,
+    task::{ready, Context, Poll},
 };
-use utils::{AmqpContext, Config, DeliveryTag};
 
-/// Creates a new channel from the pool, re-declares the queue, and updates
-/// `channel_lock` if the previous channel is disconnected.
-async fn try_reconnect(
-    pool: &Pool,
-    channel_lock: &Arc<RwLock<Channel>>,
-    config: &Config,
-    worker_name: &str,
-) -> Result<Channel, lapin::Error> {
-    apalis_core::timer::sleep(config.reconnection_delay()).await;
+pub use crate::{config::Config, delivery_tag::DeliveryTag, error::Error};
 
-    let amqp_conn = pool.get().await.map_err(|error| {
-        lapin::ErrorKind::IOError(Arc::new(io::Error::new(
-            io::ErrorKind::ConnectionRefused,
-            error,
-        )))
-    })?;
-
-    let new_channel = amqp_conn.create_channel().await?;
-    let _ = new_channel
-        .queue_declare(
-            config.namespace(),
-            config.declare_options(),
-            FieldTable::default(),
-        )
-        .await?;
-
-    let mut guard = channel_lock.write().unwrap_or_else(|e| e.into_inner());
-    if !guard.status().connected() {
-        *guard = new_channel.clone();
-        tracing::info!("Reconnected channel for worker {worker_name}");
-    }
-
-    Ok(new_channel)
-}
+mod config;
+mod error;
+mod metadata;
 
 /// Contains basic utilities for handling config and messages
-pub mod utils;
+mod delivery_tag;
 
 /// Type alias for an AMQP task with context and u64 as the task ID type.
-pub type AmqpTask<T> = Task<T, AmqpContext, u64>;
+pub type AmqpTask<Args = Vec<u8>> = Task<Args>;
 
 /// Type alias for an AMQP task ID with u64 as the ID type.
-pub type AmqpTaskId = TaskId<u64>;
+pub type AmqpTaskId = TaskId;
 
-#[derive(Debug)]
-/// A wrapper around a `lapin` AMQP channel that implements message queuing functionality.
+/// Backend that implements message queuing functionality via `amqp://` protocol.
 #[pin_project]
-pub struct AmqpBackend<M, Codec> {
+#[derive(Debug)]
+pub struct AmqpBackend<M> {
     pool: Pool,
-    channel: Arc<RwLock<Channel>>,
-    queue: lapin::Queue,
-    message_type: PhantomData<M>,
+    #[pin]
+    channel: Option<Channel>,
+    consumer: Option<Consumer>,
     config: Config,
     #[pin]
-    sink: sink::AmqpSink<M, Codec>,
+    sink: sink::AmqpSink<M>,
+    codec: JsonCodec,
+    state: State,
+    heartbeat_timer: Option<Delay>,
 }
 
-impl<M, C> Clone for AmqpBackend<M, C> {
+impl<M> Clone for AmqpBackend<M> {
     fn clone(&self) -> Self {
         Self {
             pool: self.pool.clone(),
-            channel: Arc::clone(&self.channel),
-            queue: self.queue.clone(),
-            message_type: PhantomData,
+            channel: self.channel.clone(),
+            consumer: self.consumer.clone(),
             config: self.config.clone(),
             sink: self.sink.clone(),
+            codec: self.codec.clone(),
+            state: State::Init,
+            heartbeat_timer: None,
         }
     }
 }
 
-impl<M: Send + 'static, C> Backend for AmqpBackend<M, C>
-where
-    C: Codec<M, Compact = Vec<u8>>,
-    C::Error: std::error::Error + Send + Sync + 'static,
-{
-    type Args = M;
-    type Error = Error;
-    type Beat = BoxStream<'static, Result<(), Self::Error>>;
-    type Layer = AcknowledgeLayer<Self>;
-    type Stream = TaskStream<Task<M, AmqpContext, Self::IdType>, Self::Error>;
-    type Context = AmqpContext;
-    type IdType = u64;
-    fn heartbeat(&self, worker: &WorkerContext) -> Self::Beat {
-        let channel = Arc::clone(&self.channel);
-        let worker = worker.clone();
-        let config = self.config.clone();
-        let stream = stream::unfold(
-            (channel, worker, config),
-            move |(channel, worker, config)| async move {
-                apalis_core::timer::sleep(config.heartbeat_interval()).await;
-                let is_connected = channel
-                    .read()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .status()
-                    .connected();
+enum State {
+    Init,
+    DeclareQueue(BoxSyncFuture<Result<Channel, Error>>),
+    DeclareConsumer(BoxSyncFuture<Result<Consumer, Error>>),
+    HeartBeat(BoxSyncFuture<Result<(), Error>>),
+    Ready,
+}
 
-                if !is_connected {
-                    tracing::warn!("Channel not connected for worker {}. Waiting for poll_delivery to reconnect.", worker.name());
-                }
-                Some((Ok(()), (channel, worker, config)))
-            },
-        );
-        stream.boxed()
-    }
-
-    fn middleware(&self) -> Self::Layer {
-        AcknowledgeLayer::new(self.clone())
-    }
-
-    fn poll(self, worker: &WorkerContext) -> Self::Stream {
-        self.poll_delivery(worker)
-            .map(move |item| {
-                let item = item?;
-                let bytes = item.data;
-                let tag = item.delivery_tag;
-
-                let msg: M = C::decode(&bytes).map_err(|e| {
-                    ErrorKind::IOError(Arc::new(io::Error::new(io::ErrorKind::InvalidData, e)))
-                })?;
-
-                let task = TaskBuilder::new(msg)
-                    .with_task_id(TaskId::new(tag))
-                    .with_ctx(AmqpContext::new(DeliveryTag::new(tag), item.properties))
-                    .build();
-                Ok(Some(task))
-            })
-            .boxed()
+impl std::fmt::Debug for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            State::Init => f.write_str("Init"),
+            State::DeclareQueue(_) => f.write_str("DeclareQueue(..)"),
+            State::DeclareConsumer(_) => f.write_str("DeclareConsumer(..)"),
+            State::HeartBeat(_) => f.write_str("HeartBeat(..)"),
+            State::Ready => f.write_str("Ready"),
+        }
     }
 }
 
-impl<M, C: Send + 'static> BackendExt for AmqpBackend<M, C>
-where
-    Self: Backend<Args = M, IdType = u64, Context = AmqpContext, Error = lapin::Error>,
-    C: Codec<M, Compact = Vec<u8>> + Send + 'static,
-    C::Error: std::error::Error + Send + Sync + 'static,
-    M: Send + 'static + Unpin,
-{
-    type Codec = C;
-    type Compact = Vec<u8>;
-    type CompactStream = TaskStream<AmqpTask<Self::Compact>, Error>;
+impl<M: Send + 'static> AmqpBackend<M> {
+    /// Builds the future that acquires a connection, declares the queue,
+    /// sets QoS, and starts consuming.
+    fn declare_queue(pool: Pool, config: Config) -> BoxSyncFuture<Result<Channel, Error>> {
+        async move {
+            let conn = pool.get().await?;
+            let channel = conn.create_channel().await?;
 
-    fn get_queue(&self) -> Queue {
-        Queue::from_str(self.queue.name().as_str()).expect("Queue should be a string")
-    }
+            // Extract the base queue name
+            let queue_name = config.queue.as_ref();
 
-    fn poll_compact(self, worker: &WorkerContext) -> Self::CompactStream {
-        self.poll_delivery(worker)
-            .map_ok(move |item| {
-                let bytes = item.data;
-                let tag = item.delivery_tag;
+            if config.scheduling {
+                // 1. Declare a DLX Exchange dedicated to this queue setup
+                let dlx_exchange = format!("{}_dlx", queue_name);
+                channel
+                    .exchange_declare(
+                        dlx_exchange.as_str().into(),
+                        ExchangeKind::Direct,
+                        ExchangeDeclareOptions::default(),
+                        FieldTable::default(),
+                    )
+                    .await?;
 
-                let task = TaskBuilder::new(bytes)
-                    .with_task_id(TaskId::new(tag))
-                    .with_ctx(AmqpContext::new(DeliveryTag::new(tag), item.properties))
-                    .build();
-                Some(task)
-            })
-            .boxed()
-    }
-}
+                // 2. Declare the final consumer queue (Must match config options)
+                let _main_queue = channel
+                    .queue_declare(
+                        queue_name.into(),
+                        config.declare_options,
+                        config.declare_arguments.clone(),
+                    )
+                    .await?;
 
-impl<M, C> AmqpBackend<M, C> {
-    fn poll_delivery(
-        self,
-        worker: &WorkerContext,
-    ) -> impl Stream<Item = Result<Delivery, Error>> + 'static {
-        let pool = self.pool.clone();
-        let channel = Arc::clone(&self.channel);
-        let config = self.config.clone();
-        let worker_name = worker.name().to_string();
+                // 3. Bind the consumer queue to the DLX exchange using its own name as routing key
+                channel
+                    .queue_bind(
+                        queue_name.into(),
+                        dlx_exchange.as_str().into(),
+                        queue_name.into(),
+                        QueueBindOptions::default(),
+                        FieldTable::default(),
+                    )
+                    .await?;
 
-        let stream = stream::once(async move {
-            // If the stored channel is dead, reconnect it.
-            let ch = if channel
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .status()
-                .connected()
-            {
-                channel.read().unwrap_or_else(|e| e.into_inner()).clone()
+                // 4. Create arguments for the Intermediary Waiting Queue
+                let mut waiting_args = FieldTable::default();
+                waiting_args.insert(
+                    ShortString::from("x-dead-letter-exchange"),
+                    AMQPValue::LongString(dlx_exchange.as_str().into()),
+                );
+                waiting_args.insert(
+                    ShortString::from("x-dead-letter-routing-key"),
+                    AMQPValue::LongString(queue_name.to_string().into()),
+                );
+
+                // 5. Declare the hidden waiting queue where delayed messages sit
+                let waiting_queue = format!("{}_waiting", queue_name);
+                channel
+                    .queue_declare(
+                        waiting_queue.into(),
+                        QueueDeclareOptions {
+                            durable: config.declare_options.durable,
+                            auto_delete: config.declare_options.auto_delete,
+                            ..QueueDeclareOptions::default()
+                        },
+                        waiting_args,
+                    )
+                    .await?;
             } else {
-                try_reconnect(&pool, &channel, &config, &worker_name).await?
-            };
-
-            // Set QoS/prefetch before consuming to limit memory usage
-            let qos = config.qos_options();
-            if qos.prefetch_count > 0 {
-                ch.basic_qos(qos.prefetch_count, qos.options).await?;
+                // Standard behavior: Simply declare the queue natively
+                let _queue = channel
+                    .queue_declare(
+                        queue_name.into(),
+                        config.declare_options,
+                        config.declare_arguments.clone(),
+                    )
+                    .await?;
             }
 
-            let consumer = ch
+            Ok(channel)
+        }
+        .boxed()
+        .into()
+    }
+
+    fn start_consumer(
+        channel: Channel,
+        config: Config,
+        worker_name: String,
+    ) -> BoxSyncFuture<Result<Consumer, Error>> {
+        async move {
+            // Set QoS/prefetch before consuming to limit memory usage
+            let qos = config.qos_options;
+            if config.prefetch_count > 0 {
+                channel.basic_qos(config.prefetch_count, qos).await?;
+            }
+
+            let consumer = channel
                 .basic_consume(
-                    config.namespace().as_str(),
-                    &worker_name,
-                    BasicConsumeOptions::default(),
-                    FieldTable::default(),
+                    config.queue.as_ref().into(),
+                    worker_name.as_str().into(),
+                    config.consume_options,
+                    config.declare_arguments, // Ensure these don't clash with waiting arguments
                 )
                 .await?;
-            Ok::<_, Error>(consumer)
-        })
-        .try_flatten();
-        stream
+
+            Ok(consumer)
+        }
+        .boxed()
+        .into()
+    }
+
+    fn heartbeat_future(channel: Channel) -> BoxSyncFuture<Result<(), Error>> {
+        async move {
+            if !channel.status().connected() {
+                return Err(Error::NotConnected);
+            }
+            Ok(())
+        }
+        .boxed()
+        .into()
     }
 }
 
-impl<M: Send + 'static> AmqpBackend<M, ()> {
-    /// Constructs a new instance of `AmqpBackend` from a `lapin` channel.
-    pub fn new(
-        pool: Pool,
-        channel: Channel,
-        queue: lapin::Queue,
-    ) -> AmqpBackend<M, JsonCodec<Vec<u8>>> {
-        Self::new_with_config(
-            pool,
-            channel,
-            queue,
-            Config::new(std::any::type_name::<M>()),
-        )
+impl<M: Send + 'static> Backend for AmqpBackend<M> {
+    type Task = AmqpTask;
+    type Error = Error;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut Context<'_>,
+        worker: &WorkerContext,
+    ) -> Poll<Result<(), Self::Error>> {
+        loop {
+            match &mut self.state {
+                State::Init => {
+                    if self.channel.is_none() {
+                        let fut = Self::declare_queue(self.pool.clone(), self.config.clone());
+                        self.state = State::DeclareQueue(fut);
+                        continue;
+                    }
+                    if self.consumer.is_none() {
+                        let fut = Self::start_consumer(
+                            self.channel.clone().expect("a channel exists"),
+                            self.config.clone(),
+                            worker.name().to_string(),
+                        );
+                        self.state = State::DeclareConsumer(fut);
+                        continue;
+                    }
+                    self.heartbeat_timer = Some(Delay::new(self.config.heartbeat_interval));
+                    self.state = State::Ready;
+                }
+
+                State::DeclareQueue(fut) => match fut.poll_unpin(cx) {
+                    Poll::Ready(Ok(channel)) => {
+                        self.channel = Some(channel);
+                        self.state = State::Init;
+                        return Poll::Ready(Ok(()));
+                    }
+                    Poll::Ready(Err(e)) => {
+                        return Poll::Ready(Err(e));
+                    }
+                    Poll::Pending => return Poll::Pending,
+                },
+
+                State::DeclareConsumer(fut) => match fut.poll_unpin(cx) {
+                    Poll::Ready(Ok(consumer)) => {
+                        self.consumer = Some(consumer);
+                        self.heartbeat_timer = Some(Delay::new(self.config.heartbeat_interval));
+                        self.state = State::Init;
+                        return Poll::Ready(Ok(()));
+                    }
+                    Poll::Ready(Err(e)) => {
+                        return Poll::Ready(Err(e));
+                    }
+                    Poll::Pending => return Poll::Pending,
+                },
+
+                State::HeartBeat(fut) => match fut.poll_unpin(cx) {
+                    Poll::Ready(Ok(())) => {
+                        self.heartbeat_timer = Some(Delay::new(self.config.heartbeat_interval));
+                        self.state = State::Ready;
+                        return Poll::Ready(Ok(()));
+                    }
+                    Poll::Ready(Err(e)) => {
+                        self.channel = None;
+                        self.consumer = None;
+                        return Poll::Ready(Err(e));
+                    }
+                    Poll::Pending => return Poll::Pending,
+                },
+                State::Ready => {
+                    let heartbeat_due = Pin::new(self.heartbeat_timer.as_mut().unwrap())
+                        .poll(cx)
+                        .is_ready();
+                    if heartbeat_due {
+                        let fut = Self::heartbeat_future(self.channel.clone().unwrap());
+
+                        self.state = State::HeartBeat(fut);
+                    }
+                    return Poll::Ready(Ok(()));
+                }
+            }
+        }
     }
 
-    /// Constructs a new instance of `AmqpBackend` with a config
-    pub fn new_with_config(
-        pool: Pool,
-        channel: Channel,
-        queue: lapin::Queue,
-        config: Config,
-    ) -> AmqpBackend<M, JsonCodec<Vec<u8>>> {
+    fn poll_next(
+        &mut self,
+        cx: &mut Context<'_>,
+        _: &WorkerContext,
+    ) -> Poll<Option<Result<Self::Task, Self::Error>>> {
+        let item = ready!(self.consumer.as_mut().unwrap().poll_next_unpin(cx));
+        match item {
+            Some(Ok(item)) => {
+                let bytes = item.data;
+                let tag = item.delivery_tag;
+                let props = item.properties;
+
+                let task = TaskBuilder::new(bytes)
+                    .task_id(TaskId::Int(tag))
+                    .data(DeliveryTag::new(tag))
+                    .with_metadata(metadata::properties_to_metadata(&props))
+                    .build();
+                Poll::Ready(Some(Ok(task)))
+            }
+            Some(Err(e)) => Poll::Ready(Some(Err(e.into()))),
+            None => Poll::Ready(None),
+        }
+    }
+
+    fn poll_close(
+        &mut self,
+        _: &mut Context<'_>,
+        _: &WorkerContext,
+    ) -> Poll<Result<(), Self::Error>> {
+        // TODO: Add a CleanUp state
+        // self.channel.as_ref().unwrap().close(200, "OK".into());
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<M> BackendConfig for AmqpBackend<M> {
+    type Args = M;
+
+    type Id = u64;
+
+    type Kind = Durable;
+
+    type Config = Config;
+
+    type Layer = AcknowledgeLayer<Self>;
+
+    fn config(&self) -> &Self::Config {
+        &self.config
+    }
+
+    fn middleware(&mut self, _worker: &mut WorkerContext) -> Self::Layer {
+        AcknowledgeLayer::new(self.clone())
+    }
+}
+
+impl<M> WireFormatBackend for AmqpBackend<M> {
+    type Codec = JsonCodec<Self::Compact>;
+    type Compact = Vec<u8>;
+
+    fn codec(&self) -> &Self::Codec {
+        &self.codec
+    }
+}
+
+impl<M: Send + 'static> AmqpBackend<M> {
+    /// Constructs a new instance of `AmqpBackend` from a `lapin` channel.
+    pub fn new(pool: Pool) -> AmqpBackend<M> {
         AmqpBackend {
             pool,
             sink: sink::AmqpSink::new(),
-            channel: Arc::new(RwLock::new(channel)),
-            message_type: PhantomData,
-            queue,
-            config,
+            channel: None,
+            consumer: None,
+            config: Config::default().queue(std::any::type_name::<M>()),
+            codec: JsonCodec::default(),
+            heartbeat_timer: None,
+            state: State::Init,
         }
-    }
-
-    /// Get a clone of the inner `Channel`
-    pub fn channel(&self) -> Channel {
-        self.channel
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    }
-
-    /// Get a ref to the inner `Queue`
-    pub fn queue(&self) -> &lapin::Queue {
-        &self.queue
     }
 
     /// Get a ref to the inner `Config`
@@ -301,49 +401,27 @@ impl<M: Send + 'static> AmqpBackend<M, ()> {
         &self.config
     }
 
-    /// Constructs a new instance of `AmqpBackend` from an address string.
-    ///
-    /// This function creates a `deadpool_lapin::Pool` and uses it to obtain a `lapin::Connection`.
-    /// It then creates a channel from that connection.
-    pub async fn new_from_addr<S: AsRef<str>>(
-        addr: S,
-    ) -> Result<AmqpBackend<M, JsonCodec<Vec<u8>>>, lapin::Error> {
-        let config = Config::new(std::any::type_name::<M>());
-        Self::new_from_addr_with_config(addr, config).await
-    }
-
     /// Constructs a new instance of `AmqpBackend` from an address string with custom config.
     ///
     /// This allows customizing QoS settings, queue declaration options, and other settings.
-    pub async fn new_from_addr_with_config<S: AsRef<str>>(
-        addr: S,
-        config: Config,
-    ) -> Result<AmqpBackend<M, JsonCodec<Vec<u8>>>, lapin::Error> {
-        let manager = Manager::new(addr.as_ref(), ConnectionProperties::default());
-        let pool: Pool = deadpool::managed::Pool::builder(manager)
-            .max_size(10)
+    pub fn new_from_addr<S: AsRef<str>>(addr: S) -> Result<AmqpBackend<M>, Error> {
+        let config = deadpool_lapin::Config {
+            url: Some(addr.as_ref().to_string()),
+            pool: None,
+        };
+        let pool = config
+            .builder(Default::default, deadpool::Runtime::Tokio1)
+            .map_err(|e| Error::Config(e.into()))?
             .build()
-            .map_err(|error| {
-                lapin::ErrorKind::IOError(Arc::new(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    error,
-                )))
-            })?;
-        let amqp_conn = pool.get().await.map_err(|error| {
-            lapin::ErrorKind::IOError(Arc::new(io::Error::new(
-                io::ErrorKind::ConnectionRefused,
-                error,
-            )))
-        })?;
-        let channel = amqp_conn.create_channel().await?;
-        let queue = channel
-            .queue_declare(
-                config.namespace(),
-                config.declare_options(),
-                FieldTable::default(),
-            )
-            .await?;
-        Ok(Self::new_with_config(pool, channel, queue, config))
+            .map_err(|e| Error::Config(e.into()))?;
+
+        Ok(Self::new(pool))
+    }
+
+    /// Provide a custom config
+    pub fn with_config(mut self, config: Config) -> Self {
+        self.config = config;
+        self
     }
 }
 
@@ -352,9 +430,8 @@ mod tests {
     use super::*;
 
     use apalis::prelude::{BoxDynError, EventListenerExt};
-    use apalis_codec::json::JsonCodec;
     use apalis_core::{backend::TaskSink, worker::builder::WorkerBuilder};
-    use apalis_workflow::{Workflow, WorkflowSink};
+    use apalis_workflow::{SteppedFlow, WorkflowSink};
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -367,8 +444,7 @@ mod tests {
     #[tokio::test]
     async fn basic_worker() {
         let env = std::env::var("AMQP_ADDR").unwrap();
-        let mut backend: AmqpBackend<TestMessage, JsonCodec<Vec<u8>>> =
-            AmqpBackend::new_from_addr(&env).await.unwrap();
+        let mut backend = AmqpBackend::new_from_addr(&env).unwrap();
         backend.push(TestMessage).await.unwrap();
 
         let worker = WorkerBuilder::new("rango-amigo")
@@ -381,19 +457,10 @@ mod tests {
     #[tokio::test]
     async fn workflow() {
         let env = std::env::var("AMQP_ADDR").unwrap();
-        let mut backend: AmqpBackend<Vec<u8>, JsonCodec<Vec<u8>>> =
-            AmqpBackend::new_from_addr(&env).await.unwrap();
+        let mut backend = AmqpBackend::new_from_addr(&env).unwrap();
 
-        let workflow = Workflow::new("odd-numbers-workflow")
+        let workflow = SteppedFlow::new("odd-numbers-workflow")
             .and_then(|a: usize| async move { Ok::<_, BoxDynError>((0..a).collect::<Vec<_>>()) })
-            // Cant do filter_map coz Amqp doesnt implement WaitForCompletion yet
-            // .filter_map(|x| async move {
-            //     if x % 2 != 0 {
-            //         Some(x)
-            //     } else {
-            //         None
-            //     }
-            // })
             .and_then(|a: Vec<usize>, ctx: WorkerContext| async move {
                 println!("Sum: {}", a.iter().sum::<usize>());
                 ctx.stop().unwrap();

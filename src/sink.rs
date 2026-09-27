@@ -2,81 +2,95 @@ use std::{
     collections::VecDeque,
     fmt::Debug,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use apalis_core::backend::codec::Codec;
-use futures::{
-    future::{BoxFuture, Shared},
-    FutureExt, Sink,
-};
-use lapin::{options::BasicPublishOptions, publisher_confirm::Confirmation};
+use apalis_core::backend::future::BoxSyncFuture;
+use futures::{FutureExt, Sink};
+use lapin::{options::BasicPublishOptions, Confirmation};
 
-use crate::{AmqpBackend, AmqpTask};
+use crate::{error::Error, metadata::metadata_to_properties, AmqpBackend, AmqpTask, State};
 use pin_project::pin_project;
 
 #[pin_project]
 #[derive(Debug)]
-pub(super) struct AmqpSink<T, C> {
+pub(super) struct AmqpSink<T> {
     items: VecDeque<AmqpTask<Vec<u8>>>,
-    pending_sends: VecDeque<PendingSend>,
-    _codec: std::marker::PhantomData<(T, C)>,
+    pending_sends: VecDeque<BoxSyncFuture<Result<(), Error>>>,
+    _marker: std::marker::PhantomData<T>,
 }
 
-impl<T, C> Clone for AmqpSink<T, C> {
+impl<T> Clone for AmqpSink<T> {
     fn clone(&self) -> Self {
         Self {
             items: VecDeque::new(),
             pending_sends: VecDeque::new(),
-            _codec: std::marker::PhantomData,
+            _marker: std::marker::PhantomData,
         }
     }
 }
 
-impl<T, C> AmqpSink<T, C> {
+impl<T> AmqpSink<T> {
     pub(crate) fn new() -> Self {
         Self {
             items: VecDeque::new(),
             pending_sends: VecDeque::new(),
-            _codec: std::marker::PhantomData,
+            _marker: std::marker::PhantomData,
         }
     }
 }
 
-struct PendingSend {
-    future: Shared<BoxFuture<'static, Result<Arc<Confirmation>, Arc<lapin::Error>>>>,
-}
+impl<T: Send + 'static> Sink<AmqpTask> for AmqpBackend<T> {
+    type Error = Error;
 
-impl Debug for PendingSend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PendingSend").finish()
-    }
-}
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        loop {
+            match &mut self.state {
+                State::Init => {
+                    let pool = self.pool.clone();
+                    let config = self.config.clone();
 
-impl<T, C> Sink<AmqpTask<Vec<u8>>> for AmqpBackend<T, C>
-where
-    C::Error: std::error::Error + Send,
-    C: Codec<T, Compact = Vec<u8>>,
-{
-    type Error = lapin::Error;
+                    self.state = State::DeclareQueue(Self::declare_queue(pool, config));
+                }
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+                State::DeclareQueue(fut) => match fut.poll_unpin(cx) {
+                    Poll::Ready(Ok(channel)) => {
+                        self.channel = Some(channel);
+                        self.state = State::Init;
+                        break;
+                    }
+
+                    Poll::Ready(Err(e)) => {
+                        self.state = State::Init;
+                        return Poll::Ready(Err(e));
+                    }
+
+                    Poll::Pending => {
+                        return Poll::Pending;
+                    }
+                },
+
+                // These states mean we have a channel
+                State::Ready | State::DeclareConsumer(_) | State::HeartBeat(_) => {
+                    break;
+                }
+            }
+        }
+
         // First, try to flush any pending sends
         let sink = self.project().sink.project();
 
         // Poll pending sends
         while let Some(pending) = sink.pending_sends.front_mut() {
-            match pending.future.poll_unpin(cx) {
+            match pending.poll_unpin(cx) {
                 Poll::Ready(Ok(_)) => {
                     sink.pending_sends.pop_front();
                     tracing::debug!("Completed pending send to Amqp");
                 }
                 Poll::Ready(Err(e)) => {
                     sink.pending_sends.pop_front();
-                    return Poll::Ready(Err(
-                        Arc::into_inner(e).expect("Error must not be already taken")
-                    ));
+                    return Poll::Ready(Err(e));
                 }
                 Poll::Pending => {
                     return Poll::Pending;
@@ -95,53 +109,86 @@ where
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let namespace = self.config.namespace().to_owned();
-        let channel = self
-            .channel
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let sink = self.project().sink.project();
+        let this = self.project();
+        let sink = this.sink.project();
+
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
         // First, convert any queued items to pending sends
         while let Some(item) = sink.items.pop_front() {
+            let delay_ms: Option<u64> = match item.run_at() {
+                Some(run_at_secs) => {
+                    if run_at_secs > now_secs {
+                        Some((run_at_secs - now_secs) * 1000)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            };
+            let properties = metadata_to_properties(item.metadata());
             let bytes = item.args;
-            let namespace = namespace.to_string();
-            let channel = channel.clone();
-            let properties = item.parts.ctx.properties().clone();
-            // TODO: use item.parts.run_at to set a delay
-            // Integrate with https://github.com/rabbitmq/rabbitmq-delayed-message-exchange
-            let _delay = item.parts.run_at;
-            // Create the future but don't poll it yet
+            let queue = this.config.queue.as_ref().to_owned();
+            let exchange = this.config.exchange.clone();
+            let channel = this.channel.clone();
             let future = async move {
+                let (target_routing_key, final_properties) = match delay_ms {
+                    Some(ms) => {
+                        let waiting_queue = format!("{}_waiting", queue);
+                        let properties_with_ttl = properties.with_expiration(ms.to_string().into());
+                        (waiting_queue, properties_with_ttl)
+                    }
+                    None => (queue.to_string(), properties),
+                };
+
+                // 2. Publish using the dynamically computed variables
                 let confirmation = channel
+                    .unwrap()
                     .basic_publish(
-                        "",
-                        &namespace,
+                        exchange.into(),
+                        target_routing_key.into(),
                         BasicPublishOptions::default(),
                         &bytes,
-                        properties,
+                        final_properties,
                     )
                     .await?
                     .await?;
-                Ok(Arc::new(confirmation))
+
+                match confirmation {
+                    Confirmation::Ack(returned) => {
+                        if let Some(msg) = returned {
+                            tracing::warn!(?msg, "message acked but returned as unroutable");
+                            return Err(Error::Unroutable);
+                        }
+                        Ok(())
+                    }
+                    Confirmation::Nack(returned) => {
+                        tracing::error!(?returned, "broker nacked publish");
+                        Err(Error::PublishNacked)
+                    }
+                    Confirmation::NotRequested => {
+                        tracing::debug!("publish sent without confirmation (confirms not enabled)");
+                        Ok(())
+                    }
+                }
             }
             .boxed()
-            .shared();
-            sink.pending_sends.push_back(PendingSend { future });
+            .into();
+            sink.pending_sends.push_back(future);
         }
 
         // Now poll all pending sends
         while let Some(pending) = sink.pending_sends.front_mut() {
-            match pending.future.poll_unpin(cx) {
+            match pending.poll_unpin(cx) {
                 Poll::Ready(Ok(_)) => {
                     sink.pending_sends.pop_front();
                 }
                 Poll::Ready(Err(e)) => {
                     sink.pending_sends.pop_front();
-                    return Poll::Ready(Err(
-                        Arc::into_inner(e).expect("Error must not be already taken")
-                    ));
+                    return Poll::Ready(Err(e));
                 }
                 Poll::Pending => {
                     return Poll::Pending;
