@@ -3,7 +3,7 @@ exclude-unpublished = true
 
 [advisories]
 unmaintained = "none"
-ignore = ["RUSTSEC-2026-0285", "RUSTSEC-2026-0221"]
+ignore = []
 
 [licenses]
 confidence-threshold = 0.8
@@ -26,7 +26,8 @@ skip-tree = [
     { name = "r-efi" },
     { name = "getrandom" },
     { name = "cpufeatures" },
-    { name = "syn" }
+    { name = "syn" },
+    { name = "synstructure" }
 ]
 
 [sources]

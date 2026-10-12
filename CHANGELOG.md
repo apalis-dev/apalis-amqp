@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-12
+
+- _bump_: to v1.0.0
+
 ## [1.0.0-rc.9] - 2026-09-27
 
 - _bump_: lapin and rabbitmq to latest versions
