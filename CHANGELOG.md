@@ -1,5 +1,6 @@
 ## [Unreleased]
 
+- *deps(deps)*: bump lapin from 4.12.1 to 4.12.3 ([#107](https://github.com/apalis-dev/apalis-amqp/pull/107))
 ## [1.0.0] - 2026-10-12
 
 - _bump_: to v1.0.0
