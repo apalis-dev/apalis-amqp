@@ -1,5 +1,6 @@
 ## [Unreleased]
 
+- *deps(deps)*: bump tokio from 1.53.2 to 1.54.1 ([#106](https://github.com/apalis-dev/apalis-amqp/pull/106))
 ## [1.0.0] - 2026-10-12
 
 - _bump_: to v1.0.0
