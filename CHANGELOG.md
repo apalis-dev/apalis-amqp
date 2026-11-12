@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+- chore: add auto-release and auto-changelog scripts ([#108](https://github.com/apalis-dev/apalis-amqp/pull/108))
+
 ## [1.0.0] - 2026-10-12
 
 - _bump_: to v1.0.0
