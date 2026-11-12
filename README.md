@@ -56,8 +56,8 @@ Add apalis-amqp to your Cargo.toml
 
 ```toml
 [dependencies]
-apalis = "1.0.0-rc.10"
-apalis-amqp = "1.0.0-rc.9"
+apalis = "1"
+apalis-amqp = "1"
 ```
 
 Then add to your main.rs
