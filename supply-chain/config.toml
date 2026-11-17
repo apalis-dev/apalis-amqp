@@ -32,7 +32,7 @@ version = "10.7.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.apalis]]
-version = "1.1.1"
+version = "1.2.0"
 criteria = "safe-to-run"
 
 [[exemptions.apalis-amqp]]
@@ -40,15 +40,15 @@ version = "1.0.0-alpha.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.apalis-codec]]
-version = "1.1.1"
+version = "1.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.apalis-core]]
-version = "1.1.1"
+version = "1.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.apalis-workflow]]
-version = "1.1.1"
+version = "1.2.0"
 criteria = "safe-to-run"
 
 [[exemptions.asn1-rs]]
@@ -68,7 +68,7 @@ version = "2.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.async-compat]]
-version = "0.2.6"
+version = "0.2.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.async-executor]]
@@ -140,7 +140,7 @@ version = "1.7.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.bumpalo]]
-version = "3.20.3"
+version = "3.20.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.bytes]]
@@ -152,7 +152,7 @@ version = "0.1.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.cc]]
-version = "1.11.1"
+version = "1.11.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.cfg-if]]
@@ -568,7 +568,7 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.mio]]
-version = "1.2.4"
+version = "1.2.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.moka]]
@@ -708,7 +708,7 @@ version = "6.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rand]]
-version = "0.10.3"
+version = "0.10.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rand_core]]
@@ -1048,7 +1048,7 @@ version = "1.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
-version = "1.29.2"
+version = "1.29.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.valuable]]

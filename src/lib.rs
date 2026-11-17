@@ -268,7 +268,7 @@ impl<M: Send + 'static> Backend for AmqpBackend<M> {
                     Poll::Ready(Ok(channel)) => {
                         self.channel = Some(channel);
                         self.state = State::Init;
-                        return Poll::Ready(Ok(()));
+                        continue;
                     }
                     Poll::Ready(Err(e)) => {
                         return Poll::Ready(Err(e));
