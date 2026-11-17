@@ -17,7 +17,6 @@ deadpool = "0.13.1"
 deadpool-lapin = "0.14.0"
 lapin = "4.12.3"
 futures = { version = "0.3.34", default-features = true }
-tower = "0.5"
 tracing = "0.1"
 pin-project = "1.1"
 serde = { version = "1", features = ["derive"] }

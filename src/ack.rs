@@ -11,7 +11,7 @@ impl<M: Send + 'static, Res: Send + Sync + 'static> Acknowledge<Res> for AmqpBac
     type Future = BoxFuture<'static, Result<(), Error>>;
 
     fn ack(&mut self, _res: &Result<Res, BoxDynError>, ctx: &ExecutionContext) -> Self::Future {
-        let channel = self.channel.clone();
+        let channel = self.channel.try_lock().unwrap().clone();
         let config = self.config.clone();
         let tag = ctx.data().get::<DeliveryTag>().cloned();
         let status = ctx.status();

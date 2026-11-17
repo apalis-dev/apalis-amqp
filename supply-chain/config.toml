@@ -913,7 +913,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.sync_wrapper]]
 version = "1.0.2"
-criteria = "safe-to-deploy"
+criteria = "safe-to-run"
 
 [[exemptions.synstructure]]
 version = "0.13.2"
@@ -989,7 +989,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.tower]]
 version = "0.5.3"
-criteria = "safe-to-deploy"
+criteria = "safe-to-run"
 
 [[exemptions.tower-layer]]
 version = "0.3.3"

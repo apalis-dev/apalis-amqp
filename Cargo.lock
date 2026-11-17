@@ -103,7 +103,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rusqlite",
- "tower",
  "tracing",
  "tracing-subscriber",
 ]
