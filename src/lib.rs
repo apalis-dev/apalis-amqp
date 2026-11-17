@@ -32,7 +32,7 @@ use apalis_core::{
     worker::{context::WorkerContext, ext::ack::AcknowledgeLayer},
 };
 use deadpool_lapin::Pool;
-use futures::{FutureExt, StreamExt};
+use futures::{lock::Mutex, FutureExt, StreamExt};
 use lapin::{
     options::{ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions},
     types::{AMQPValue, FieldTable, ShortString},
@@ -42,6 +42,7 @@ use pin_project::pin_project;
 use std::{
     future::Future,
     pin::Pin,
+    sync::Arc,
     task::{ready, Context, Poll},
 };
 
@@ -66,7 +67,7 @@ pub type AmqpTaskId = TaskId;
 pub struct AmqpBackend<M> {
     pool: Pool,
     #[pin]
-    channel: Option<Channel>,
+    channel: Arc<Mutex<Option<Channel>>>,
     consumer: Option<Consumer>,
     config: Config,
     #[pin]
@@ -246,14 +247,15 @@ impl<M: Send + 'static> Backend for AmqpBackend<M> {
         loop {
             match &mut self.state {
                 State::Init => {
-                    if self.channel.is_none() {
+                    let channel = self.channel.try_lock().unwrap().clone();
+                    if channel.is_none() {
                         let fut = Self::declare_queue(self.pool.clone(), self.config.clone());
                         self.state = State::DeclareQueue(fut);
                         continue;
                     }
                     if self.consumer.is_none() {
                         let fut = Self::start_consumer(
-                            self.channel.clone().expect("a channel exists"),
+                            channel.clone().expect("a channel exists"),
                             self.config.clone(),
                             worker.name().to_string(),
                         );
@@ -266,9 +268,8 @@ impl<M: Send + 'static> Backend for AmqpBackend<M> {
 
                 State::DeclareQueue(fut) => match fut.poll_unpin(cx) {
                     Poll::Ready(Ok(channel)) => {
-                        self.channel = Some(channel);
+                        self.channel.try_lock().unwrap().replace(channel);
                         self.state = State::Init;
-                        continue;
                     }
                     Poll::Ready(Err(e)) => {
                         return Poll::Ready(Err(e));
@@ -296,7 +297,7 @@ impl<M: Send + 'static> Backend for AmqpBackend<M> {
                         return Poll::Ready(Ok(()));
                     }
                     Poll::Ready(Err(e)) => {
-                        self.channel = None;
+                        self.channel.try_lock().unwrap().take();
                         self.consumer = None;
                         return Poll::Ready(Err(e));
                     }
@@ -307,7 +308,9 @@ impl<M: Send + 'static> Backend for AmqpBackend<M> {
                         .poll(cx)
                         .is_ready();
                     if heartbeat_due {
-                        let fut = Self::heartbeat_future(self.channel.clone().unwrap());
+                        let fut = Self::heartbeat_future(
+                            self.channel.try_lock().unwrap().clone().unwrap(),
+                        );
 
                         self.state = State::HeartBeat(fut);
                     }
@@ -387,7 +390,7 @@ impl<M: Send + 'static> AmqpBackend<M> {
         AmqpBackend {
             pool,
             sink: sink::AmqpSink::new(),
-            channel: None,
+            channel: Arc::default(),
             consumer: None,
             config: Config::default().queue(std::any::type_name::<M>()),
             codec: JsonCodec::default(),

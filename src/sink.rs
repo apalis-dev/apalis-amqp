@@ -56,7 +56,7 @@ impl<T: Send + 'static> Sink<AmqpTask> for AmqpBackend<T> {
 
                 State::DeclareQueue(fut) => match fut.poll_unpin(cx) {
                     Poll::Ready(Ok(channel)) => {
-                        self.channel = Some(channel);
+                        self.channel.try_lock().unwrap().replace(channel);
                         self.state = State::Init;
                         break;
                     }
@@ -133,7 +133,7 @@ impl<T: Send + 'static> Sink<AmqpTask> for AmqpBackend<T> {
             let bytes = item.args;
             let queue = this.config.queue.as_ref().to_owned();
             let exchange = this.config.exchange.clone();
-            let channel = this.channel.clone();
+            let channel = this.channel.try_lock().unwrap().clone();
             let future = async move {
                 let (target_routing_key, final_properties) = match delay_ms {
                     Some(ms) => {
