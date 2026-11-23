@@ -1,5 +1,6 @@
 ## [Unreleased]
 
+- *deps(deps)*: bump pin-project from 1.1.13 to 1.2.0 ([#117](https://github.com/apalis-dev/apalis-amqp/pull/117))
 ## [1.1.2](https://github.com/apalis-dev/apalis-amqp/releases/tag/v1.1.2)
 
 - fix: ensure a shared channel for ack ([#115](https://github.com/apalis-dev/apalis-amqp/pull/115))
